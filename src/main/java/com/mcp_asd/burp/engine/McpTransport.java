@@ -1,7 +1,9 @@
 package com.mcp_asd.burp.engine;
 
+import com.mcp_asd.burp.ui.ConnectionConfiguration;
+
 public interface McpTransport {
-    void connect(String host, int port, String path, TransportListener listener);
+    void connect(ConnectionConfiguration config, TransportListener listener);
     void send(String message);
     void close();
 }

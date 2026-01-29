@@ -3,6 +3,7 @@ package com.mcp_asd.burp.engine;
 import burp.api.montoya.MontoyaApi;
 import com.mcp_asd.burp.test.SecurityTester;
 import com.mcp_asd.burp.ui.DashboardTab;
+import com.mcp_asd.burp.ui.ConnectionConfiguration;
 import org.json.JSONObject;
 
 import javax.swing.SwingUtilities;
@@ -11,11 +12,12 @@ import java.util.concurrent.TimeUnit;
 
 public class EnumerationEngine implements TransportListener {
     private final MontoyaApi api;
-    private DashboardTab dashboardTab;
+    private DashboardTab dashboardTab; // Remove final
     private final SessionStore sessionStore;
     private final SecurityTester tester;
     private McpTransport transport;
     private CountDownLatch latch;
+    private volatile boolean connectionFailed = false;
 
     public EnumerationEngine(MontoyaApi api, DashboardTab dashboardTab, SecurityTester tester, SessionStore sessionStore) {
         this.api = api;
@@ -28,7 +30,14 @@ public class EnumerationEngine implements TransportListener {
         this.dashboardTab = dashboardTab;
     }
 
-    public void start(String host, int port, String transportType, String path) {
+    public void start(ConnectionConfiguration config) {
+        String host = config.getHost();
+        int port = config.getPort();
+        String transportType = config.getTransport();
+        String path = config.getPath();
+        
+        this.connectionFailed = false; // Reset flag
+
         if (dashboardTab != null) {
             dashboardTab.setTarget(host, port);
             dashboardTab.setStatus("🟠 Connecting via " + transportType + "...", java.awt.Color.ORANGE.darker());
@@ -45,14 +54,19 @@ public class EnumerationEngine implements TransportListener {
                     transport = new SseTransport(api);
                 }
                 
-                transport.connect(host, port, path, this);
+                transport.connect(config, this);
 
                 if (!latch.await(15, TimeUnit.SECONDS)) {
-                    api.logging().logToError("Enumeration timed out waiting for responses.");
-                    if (dashboardTab != null) dashboardTab.setStatus("🔴 Connection Timed Out", java.awt.Color.RED);
+                    if (!connectionFailed) {
+                        api.logging().logToError("Enumeration timed out waiting for responses.");
+                        if (dashboardTab != null) dashboardTab.setStatus("🔴 Connection Timed Out", java.awt.Color.RED);
+                    }
+                    // If connectionFailed is true, onError already updated the status.
                 } else {
-                    api.logging().logToOutput("Enumeration completed successfully.");
-                    if (dashboardTab != null) dashboardTab.setStatus("🟢 Connected & Ready", java.awt.Color.GREEN.darker());
+                    if (!connectionFailed) {
+                        api.logging().logToOutput("Enumeration completed successfully.");
+                        if (dashboardTab != null) dashboardTab.setStatus("🟢 Connected & Ready", java.awt.Color.GREEN.darker());
+                    }
                 }
 
             } catch (Exception e) {
@@ -122,7 +136,14 @@ public class EnumerationEngine implements TransportListener {
 
     @Override
     public void onError(Throwable t) {
-        api.logging().logToError("Transport failure: " + (t != null ? t.getMessage() : "Unknown error"));
+        connectionFailed = true;
+        String errorMsg = (t != null ? t.getMessage() : "Unknown error");
+        api.logging().logToError("Transport failure: " + errorMsg);
+        
+        if (dashboardTab != null) {
+            dashboardTab.setStatus("🔴 Failed: " + errorMsg, java.awt.Color.RED);
+        }
+        
         if (latch != null) {
             while (latch.getCount() > 0) latch.countDown();
         }

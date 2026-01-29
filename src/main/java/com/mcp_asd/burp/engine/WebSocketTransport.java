@@ -11,31 +11,50 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.concurrent.TimeUnit;
 
+import com.mcp_asd.burp.ui.ConnectionConfiguration;
+import javax.net.ssl.*;
+import java.io.FileInputStream;
+import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.util.concurrent.TimeUnit;
+
 public class WebSocketTransport implements McpTransport {
     private final MontoyaApi api;
     private OkHttpClient client;
     private WebSocket webSocket;
-    private String targetHost;
-    private int targetPort;
+    private ConnectionConfiguration config;
 
     public WebSocketTransport(MontoyaApi api) {
         this.api = api;
     }
 
     @Override
-    public void connect(String host, int port, String path, TransportListener listener) {
-        this.targetHost = host;
-        this.targetPort = port;
+    public void connect(ConnectionConfiguration config, TransportListener listener) {
+        this.config = config;
 
-        client = new OkHttpClient.Builder()
-                .readTimeout(0, TimeUnit.SECONDS)
-                .build();
+        OkHttpClient.Builder builder = new OkHttpClient.Builder()
+                .readTimeout(0, TimeUnit.SECONDS);
 
-        Request request = new Request.Builder()
-                .url("http://" + targetHost + ":" + targetPort + path) 
-                .build();
+        if (config.isUseMtls()) {
+            configureMtls(builder, config);
+        }
 
-        webSocket = client.newWebSocket(request, new WebSocketListener() {
+        client = builder.build();
+
+        String url = "http://" + config.getHost() + ":" + config.getPort() + config.getPath();
+        if (config.isUseMtls()) {
+            url = url.replace("http://", "https://");
+        }
+        // OkHttp handles ws:// vs http:// automatically in some contexts, 
+        // but for WebSockets we should ensure it's ws:// or wss://
+        url = url.replace("http://", "ws://").replace("https://", "wss://");
+
+        Request.Builder requestBuilder = new Request.Builder().url(url);
+        
+        // Add custom headers
+        config.getHeaders().forEach(requestBuilder::addHeader);
+
+        webSocket = client.newWebSocket(requestBuilder.build(), new WebSocketListener() {
             @Override
             public void onOpen(@NotNull WebSocket webSocket, @NotNull Response response) {
                 listener.onOpen();
@@ -54,9 +73,32 @@ public class WebSocketTransport implements McpTransport {
 
             @Override
             public void onFailure(@NotNull WebSocket webSocket, @NotNull Throwable t, @Nullable Response response) {
-                listener.onError(t);
+                if (response != null) {
+                    listener.onError(new RuntimeException("HTTP " + response.code() + ": " + response.message()));
+                } else {
+                    listener.onError(t);
+                }
             }
         });
+    }
+
+    private void configureMtls(OkHttpClient.Builder builder, ConnectionConfiguration config) {
+        try {
+            KeyStore keyStore = KeyStore.getInstance("PKCS12");
+            try (FileInputStream fis = new FileInputStream(config.getClientCertPath())) {
+                keyStore.load(fis, config.getClientCertPassword().toCharArray());
+            }
+
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(keyStore, config.getClientCertPassword().toCharArray());
+
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(kmf.getKeyManagers(), null, new SecureRandom());
+
+            builder.sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).getTrustManagers()[0]);
+        } catch (Exception e) {
+            api.logging().logToError("Failed to configure mTLS for WebSocket: " + e.getMessage());
+        }
     }
 
     @Override

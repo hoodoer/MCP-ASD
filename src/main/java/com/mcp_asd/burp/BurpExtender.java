@@ -21,10 +21,12 @@ public class BurpExtender implements BurpExtension
             
             api.logging().logToOutput("Initializing SecurityTester...");
             SecurityTester tester = new SecurityTester(api);
+            tester.setSessionStore(sessionStore);
             
             // Refactored initialization order to handle circular dependencies
             api.logging().logToOutput("Initializing EnumerationEngine...");
             EnumerationEngine engine = new EnumerationEngine(api, null, tester, sessionStore);
+            tester.setEngine(engine);
 
             api.logging().logToOutput("Initializing McpProxy...");
             McpProxy proxy = new McpProxy(api, sessionStore, engine);
@@ -36,8 +38,8 @@ public class BurpExtender implements BurpExtension
             engine.setDashboardTab(dashboardTab);
             
             // Allow DashboardTab to trigger connection
-            dashboardTab.setConnectionListener((host, port, transport, path) -> {
-                engine.start(host, port, transport, path);
+            dashboardTab.setConnectionListener((config) -> {
+                engine.start(config);
             });
             
             api.logging().logToOutput("Registering HttpHandler...");

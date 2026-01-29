@@ -34,16 +34,11 @@ public class ContextMenuFactory implements ContextMenuItemsProvider {
                 SwingUtilities.invokeLater(() -> {
                     // Just pass null as owner or use a dummy frame.
                     // Actually, Montoya doesn't expose the main frame easily. We can use null.
-                    ConnectionDialog connectionDialog = new ConnectionDialog(null, host, port);
+                    ConnectionDialog connectionDialog = new ConnectionDialog(null, host, port, null);
                     connectionDialog.setVisible(true);
                     
                     if (connectionDialog.isConfirmed()) {
-                        engine.start(
-                            connectionDialog.getHost(),
-                            connectionDialog.getPort(),
-                            connectionDialog.getTransport(),
-                            connectionDialog.getPath()
-                        );
+                        engine.start(connectionDialog.getConfiguration());
                     }
                 });
             }

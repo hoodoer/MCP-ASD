@@ -51,6 +51,10 @@ public class AutoDetector {
                                 results.add(new DetectionResult("SSE", path));
                                 continue; // Don't check WS for this path if it's already SSE
                             }
+                        } else if (response.code() == 401 || response.code() == 403) {
+                            // If we get an auth error, the endpoint exists!
+                            results.add(new DetectionResult("SSE (Auth Required)", path));
+                            continue;
                         }
                     }
                 } catch (Exception ignored) {}
@@ -67,12 +71,16 @@ public class AutoDetector {
                             .build();
                     try (Response response = client.newCall(wsProbe).execute()) {
                         // 101 Switching Protocols = Success
-                        // 426 Upgrade Required = Valid endpoint, but maybe headers wrong (still implies it exists)
+                        // 426 Upgrade Required = Valid endpoint
+                        // 401/403 = Valid endpoint, auth required
                         if (response.code() == 101 || response.code() == 426) {
-                            if (path.contains("ws")) { // Still keep heuristic or just accept it?
-                                // If 101, it is DEFINITELY a websocket.
+                            if (path.contains("ws")) { 
                                 results.add(new DetectionResult("WebSocket", path));
                             }
+                        } else if (response.code() == 401 || response.code() == 403) {
+                             if (path.contains("ws")) {
+                                 results.add(new DetectionResult("WebSocket (Auth Required)", path));
+                             }
                         } else if (response.code() != 404 && path.contains("ws")) {
                              // If it exists (not 404) and looks like a ws path, we guess yes.
                              results.add(new DetectionResult("WebSocket", path));

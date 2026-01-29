@@ -14,22 +14,24 @@
 ### 1. Authentication Support
 **Priority:** High
 **Objective:** Connect to secured MCP servers.
-*   [ ] Update `ConnectionDialog` to accept custom HTTP Headers (Authorization).
-*   [ ] Propagate headers to `SseTransport` and `WebSocketTransport`.
+*   [x] Update `ConnectionDialog` to accept custom HTTP Headers (Authorization).
+*   [x] Propagate headers to `SseTransport` and `WebSocketTransport`.
+*   [x] Implement mTLS support in `OkHttp` client for SSE and WebSocket.
 *   [ ] Support Auth Payloads in JSON-RPC `initialize`.
 
 ### 2. Automated Vulnerability Scanning
 **Priority:** High
 **Objective:** Active audit of MCP Primitives.
-*   [ ] **Infrastructure:** Create `Scanner` module.
-*   [ ] **Type Confusion:** Fuzz tool arguments with invalid types.
+*   [x] **Infrastructure:** Create `SecurityTester` module and link to UI.
+*   [x] **Type Confusion:** Fuzz tool arguments with invalid types and check for crashes/leaks.
+*   [x] **Injection:** Probe String arguments for injection markers and check for reflection.
 *   [ ] **BOLA:** Iterate Resource URIs.
-*   [ ] **Injection:** Probe String arguments for injection markers.
 
 ### 3. Test Environment
-*   [ ] Update `mcp_server.py` to support Authentication (Header check).
-*   [ ] Add vulnerable endpoints to `mcp_server.py` for scanner verification.
+*   [x] Update `mcp_server.py` to support Authentication (Header check).
+*   [x] Add vulnerable endpoints to `mcp_server.py` for scanner verification (`echo_input`, `crash_me`).
+
 
 ---
 **Current Build:** Stable
-**Version:** 1.0 (Phase 1 Final)
+**Version:** 2.0 (Phase 2 Initial)

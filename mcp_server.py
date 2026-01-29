@@ -12,6 +12,10 @@ ACTIVE_QUEUES = []
 # Global list of active WebSockets
 ACTIVE_WEBSOCKETS = []
 
+# AUTH CONFIG
+REQUIRED_TOKEN = "bearer-token-123"
+REQUIRED_API_KEY = "secret-key-456"
+
 # In-memory storage for discovered items
 TOOLS = {
     "get_weather": {
@@ -27,17 +31,22 @@ TOOLS = {
             "required": ["location"]
         }
     },
-    "get_user": {
-        "description": "Get user details by ID. Useful for concurrency testing.",
+    "echo_input": {
+        "description": "Vulnerable tool: Echoes input directly (Simulated Injection)",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "user_id": {
-                    "type": "integer",
-                    "description": "The user ID to fetch."
-                }
-            },
-            "required": ["user_id"]
+                "message": { "type": "string" }
+            }
+        }
+    },
+    "crash_me": {
+        "description": "Vulnerable tool: Crashes on non-integer input (Type Confusion)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code": { "type": "integer" }
+            }
         }
     }
 }
@@ -46,6 +55,16 @@ RESOURCES = {
     "user_data": {
         "uri": "file:///etc/passwd",
         "description": "A sample file resource URI.",
+        "type": "text/plain"
+    },
+    "secure_logs_template": {
+        "uri": "file:///logs/{id}",
+        "description": "Vulnerable resource template",
+        "type": "text/plain"
+    },
+    "latest_log": {
+        "uri": "file:///logs/100",
+        "description": "The most recent log file.",
         "type": "text/plain"
     }
 }
@@ -56,6 +75,19 @@ PROMPTS = {
         "template": "Please summarize the following text: {text}"
     }
 }
+
+def verify_auth(request: Request):
+    # Check for Bearer Token
+    auth_header = request.headers.get("Authorization")
+    if auth_header == f"Bearer {REQUIRED_TOKEN}":
+        return True
+    
+    # Check for API Key
+    api_key = request.headers.get("X-API-Key")
+    if api_key == REQUIRED_API_KEY:
+        return True
+    
+    return False
 
 async def handle_mcp_request(request_data):
     method = request_data.get("method")
@@ -83,27 +115,55 @@ async def handle_mcp_request(request_data):
         await broadcast_message(response)
     elif method == "tools/invoke":
         tool_name = params.get("name")
-        tool_params = params.get("arguments")
+        tool_params = params.get("arguments", {})
         if tool_name == "get_weather":
             response["result"] = {
                 "status": "success",
                 "output": f"Successfully invoked {tool_name} with parameters: {tool_params}"
             }
-        elif tool_name == "get_user":
-            try:
-                uid = int(tool_params.get("user_id"))
-                # Simulate a slight delay to encourage out-of-order processing if concurrent
-                await asyncio.sleep(0.05)
-                response["result"] = {
-                    "id": uid,
-                    "name": f"User_{uid}",
-                    "email": f"user{uid}@example.com",
-                    "role": "admin" if uid == 0 else "user"
+        elif tool_name == "echo_input":
+            msg = tool_params.get("message", "")
+            # Simulate a "vulnerable" reflection
+            response["result"] = { "echo": msg }
+        elif tool_name == "crash_me":
+            code = tool_params.get("code")
+            if not isinstance(code, int):
+                # Simulate a crash or leak
+                response["error"] = {
+                    "code": -32603,
+                    "message": "Internal error: Expected int, got " + str(type(code)),
+                    "data": "Stacktrace: ... at mcp_server.py:120"
                 }
-            except (ValueError, TypeError):
-                 response["error"] = {"code": -32602, "message": "Invalid user_id"}
+            else:
+                response["result"] = { "status": "ok", "code": code }
         else:
             response["error"] = {"code": -32601, "message": "Method not found"}
+        await broadcast_message(response)
+    elif method == "resources/read":
+        uri = params.get("uri")
+        if uri == "file:///etc/passwd":
+            response["result"] = {
+                "contents": [{
+                    "uri": uri,
+                    "mimeType": "text/plain",
+                    "text": "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000:..."
+                }]
+            }
+        elif "file:///logs/" in uri:
+            # Vulnerable BOLA logic: Accepts any ID
+            try:
+                log_id = uri.split("/")[-1]
+                response["result"] = {
+                    "contents": [{
+                        "uri": uri,
+                        "mimeType": "text/plain",
+                        "text": f"Confidential Log Entry #{log_id}: System crashed at..."
+                    }]
+                }
+            except:
+                response["error"] = {"code": -32602, "message": "Invalid URI"}
+        else:
+             response["error"] = {"code": -32602, "message": "Resource not found"}
         await broadcast_message(response)
     else:
         response["error"] = {"code": -32601, "message": "Method not found"}
@@ -111,99 +171,87 @@ async def handle_mcp_request(request_data):
 
 async def broadcast_message(message):
     data = json.dumps(message)
-    print(f"DEBUG: Broadcasting message to {len(ACTIVE_QUEUES)} queues and {len(ACTIVE_WEBSOCKETS)} sockets: {data}")
+    print(f"DEBUG: Broadcasting message: {data}")
     
     # Broadcast to SSE
     for i, queue in enumerate(list(ACTIVE_QUEUES)):
         await queue.put(data)
-        print(f"DEBUG: Put message in SSE queue {i}")
 
     # Broadcast to WebSockets
     for i, ws in enumerate(list(ACTIVE_WEBSOCKETS)):
         try:
             await ws.send_text(data)
-            print(f"DEBUG: Sent message to WebSocket {i}")
         except Exception as e:
-            print(f"DEBUG: Failed to send to WebSocket {i}: {e}")
             if ws in ACTIVE_WEBSOCKETS:
                 ACTIVE_WEBSOCKETS.remove(ws)
 
 # WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Check headers in handshake
+    auth_header = websocket.headers.get("Authorization")
+    api_key = websocket.headers.get("X-API-Key")
+    
+    if auth_header != f"Bearer {REQUIRED_TOKEN}" and api_key != REQUIRED_API_KEY:
+        print("DEBUG: WS Auth Failed")
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     ACTIVE_WEBSOCKETS.append(websocket)
-    print(f"DEBUG: WebSocket connected. Active sockets: {len(ACTIVE_WEBSOCKETS)}")
     try:
         while True:
             data = await websocket.receive_text()
-            print(f"DEBUG: WebSocket received: {data}")
             try:
                 request_data = json.loads(data)
                 await handle_mcp_request(request_data)
             except json.JSONDecodeError:
-                print("DEBUG: WebSocket JSON parse error")
-    except Exception as e:
-        print(f"DEBUG: WebSocket error/closed: {e}")
+                pass
+    except Exception:
+        pass
     finally:
         if websocket in ACTIVE_WEBSOCKETS:
             ACTIVE_WEBSOCKETS.remove(websocket)
-        print(f"DEBUG: WebSocket disconnected. Active sockets: {len(ACTIVE_WEBSOCKETS)}")
 
 # SSE endpoint - ESTABLISHES CONNECTION
 @app.get("/mcp")
 async def mcp_sse_endpoint(request: Request):
+    if not verify_auth(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
     sse_queue = asyncio.Queue()
     ACTIVE_QUEUES.append(sse_queue)
-    print(f"DEBUG: Client connected. Active queues: {len(ACTIVE_QUEUES)}")
 
     async def event_generator():
         try:
             while True:
                 message = await sse_queue.get()
-                print(f"DEBUG: Yielding message from queue")
-                yield {"event": "message", "data": message} # Default event type is often 'message'
+                yield {"event": "message", "data": message}
         except asyncio.CancelledError:
-            print("DEBUG: Client disconnected")
             if sse_queue in ACTIVE_QUEUES:
                 ACTIVE_QUEUES.remove(sse_queue)
-            print(f"DEBUG: Active queues: {len(ACTIVE_QUEUES)}")
 
     return EventSourceResponse(event_generator())
 
 # POST endpoint - RECEIVES MESSAGES
 @app.post("/mcp")
 async def mcp_post_endpoint(request: Request):
+    if not verify_auth(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
     try:
         body_bytes = await request.body()
         body_str = body_bytes.decode('utf-8')
-        
-        # 1. Try to parse the entire body as a single JSON object (or array)
-        try:
-            request_data = json.loads(body_str)
-            if isinstance(request_data, list):
-                for item in request_data:
-                    await handle_mcp_request(item)
-            else:
-                await handle_mcp_request(request_data)
-            return JSONResponse({"status": "accepted"})
-        except json.JSONDecodeError:
-            # 2. Fallback to JSON-Lines (NDJSON) if full parse fails
-            pass
-
-        # Handle Line-delimited JSON
-        for line in body_str.splitlines():
-             if line.strip():
-                try:
-                    request_data = json.loads(line)
-                    await handle_mcp_request(request_data)
-                except json.JSONDecodeError:
-                    print(f"DEBUG: Failed to parse line: {line}")
-                    pass
+        request_data = json.loads(body_str)
+        if isinstance(request_data, list):
+            for item in request_data:
+                await handle_mcp_request(item)
+        else:
+            await handle_mcp_request(request_data)
         return JSONResponse({"status": "accepted"})
     except Exception as e:
-         print(f"DEBUG: Server Error: {e}")
          return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 
 if __name__ == "__main__":
     import uvicorn

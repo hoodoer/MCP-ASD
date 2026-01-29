@@ -14,13 +14,17 @@ import javax.swing.border.TitledBorder;
 import java.awt.*;
 import java.nio.charset.StandardCharsets;
 
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+
 public class DashboardTab extends JComponent {
     private final MontoyaApi api;
-    private final McpProxy mcpProxy; // Add field
+    private final SecurityTester tester;
+    private final McpProxy mcpProxy;
     private ConnectionListener connectionListener;
 
     public interface ConnectionListener {
-        void onConnect(String host, int port, String transport, String path);
+        void onConnect(ConnectionConfiguration config);
     }
 
     public void setConnectionListener(ConnectionListener listener) {
@@ -44,9 +48,11 @@ public class DashboardTab extends JComponent {
     
     private String targetHost;
     private int targetPort;
+    private ConnectionConfiguration lastConfig; // Persist last config
 
     public DashboardTab(MontoyaApi api, SecurityTester tester, McpProxy mcpProxy) {
         this.api = api;
+        this.tester = tester;
         this.mcpProxy = mcpProxy;
         initComponents();
     }
@@ -77,11 +83,12 @@ public class DashboardTab extends JComponent {
         JButton connectButton = new JButton("New Connection");
         connectButton.addActionListener(e -> {
             SwingUtilities.invokeLater(() -> {
-                ConnectionDialog dialog = new ConnectionDialog(null, "localhost", 8000);
+                ConnectionDialog dialog = new ConnectionDialog(null, "localhost", 8000, lastConfig);
                 dialog.setVisible(true);
                 if (dialog.isConfirmed()) {
+                    lastConfig = dialog.getConfiguration(); // Save it
                     if (connectionListener != null) {
-                        connectionListener.onConnect(dialog.getHost(), dialog.getPort(), dialog.getTransport(), dialog.getPath());
+                        connectionListener.onConnect(lastConfig);
                     }
                 }
             });
@@ -122,6 +129,8 @@ public class DashboardTab extends JComponent {
         promptsScroll.setBorder(BorderFactory.createTitledBorder(null, "💬 Prompts", TitledBorder.DEFAULT_JUSTIFICATION, TitledBorder.DEFAULT_POSITION, new Font("SansSerif", Font.BOLD, 12)));
         primitivesPanel.add(promptsScroll);
 
+        addContextMenu(toolsList, "Tools");
+        addContextMenu(resourcesList, "Resources");
 
         // --- RIGHT PANEL: Details & Actions ---
         JPanel rightPanel = new JPanel(new BorderLayout());
@@ -250,6 +259,15 @@ public class DashboardTab extends JComponent {
         String requestBody = metadataInspector.getText();
         if (requestBody == null || requestBody.isEmpty()) return;
 
+        // Determine a name for the tab
+        String primitiveName = "MCP-Request";
+        AttackSurfaceNode selected = toolsList.getSelectedValue();
+        if (selected == null) selected = resourcesList.getSelectedValue();
+        if (selected == null) selected = promptsList.getSelectedValue();
+        if (selected != null) {
+            primitiveName = "MCP: " + selected.toString();
+        }
+
         // Directly target the internal proxy port
         // This avoids DNS issues and "HttpHandler" redirection complexity
         int port = mcpProxy.getInternalPort();
@@ -275,10 +293,10 @@ public class DashboardTab extends JComponent {
         if (isIntruder) {
             api.intruder().sendToIntruder(httpRequest);
         } else {
-            api.repeater().sendToRepeater(httpRequest);
+            api.repeater().sendToRepeater(httpRequest, primitiveName);
         }
         
-        api.logging().logToOutput("Sent to " + (isIntruder ? "Intruder" : "Repeater") + ": " + requestBody);
+        api.logging().logToOutput("Sent to " + (isIntruder ? "Intruder" : "Repeater") + " [" + primitiveName + "]: " + requestBody);
     }
     
     // Reuse existing logic, simplified
@@ -315,5 +333,39 @@ public class DashboardTab extends JComponent {
             return itemData.toString(4);
         }
         return requestJson.toString(4);
+    }
+
+    private void addContextMenu(JList<AttackSurfaceNode> list, String type) {
+        JPopupMenu popupMenu = new JPopupMenu();
+        JMenuItem scanItem = new JMenuItem("Active Scan (Phase 2)");
+        scanItem.addActionListener(e -> {
+            AttackSurfaceNode selected = list.getSelectedValue();
+            if (selected != null) {
+                if ("Tools".equals(type)) {
+                    tester.scanTool(selected);
+                } else if ("Resources".equals(type)) {
+                    tester.scanResource(selected);
+                }
+            }
+        });
+        popupMenu.add(scanItem);
+
+        list.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) showPopup(e);
+            }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) showPopup(e);
+            }
+            private void showPopup(MouseEvent e) {
+                int index = list.locationToIndex(e.getPoint());
+                if (index != -1) {
+                    list.setSelectedIndex(index);
+                    popupMenu.show(e.getComponent(), e.getX(), e.getY());
+                }
+            }
+        });
     }
 }
