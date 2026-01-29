@@ -58,6 +58,19 @@ public class ConnectionDialog extends JDialog {
                 certPathField.setText(existingConfig.getClientCertPath());
                 certPasswordField.setText(existingConfig.getClientCertPassword());
             }
+            
+            // Fill Init Params
+            if (existingConfig.getInitializationOptions() != null) {
+                 // We need to wait for createAuthTab to run? No, createAuthTab is called before this.
+                 // But wait, initParamsArea is created inside createAuthTab.
+                 // createAuthTab is called a few lines above.
+            }
+        }
+        
+        // We need to make sure initParamsArea is accessible.
+        // It is created in createAuthTab which is called above.
+        if (existingConfig != null && existingConfig.getInitializationOptions() != null) {
+             if (initParamsArea != null) initParamsArea.setText(existingConfig.getInitializationOptions());
         }
 
         add(tabbedPane, BorderLayout.CENTER);
@@ -255,9 +268,39 @@ public class ConnectionDialog extends JDialog {
         toggleMtlsFields(false); // Init disabled
         
         panel.add(mtlsPanel, BorderLayout.SOUTH);
+
+        // --- Init Params Section ---
+        JPanel initParamsPanel = new JPanel(new BorderLayout());
+        initParamsPanel.setBorder(BorderFactory.createTitledBorder("Initialization Parameters (JSON)"));
+        initParamsPanel.setPreferredSize(new Dimension(panel.getWidth(), 100)); // Fixed height
+        
+        JTextArea initParamsArea = new JTextArea("{}");
+        initParamsArea.setRows(4);
+        initParamsPanel.add(new JScrollPane(initParamsArea), BorderLayout.CENTER);
+        
+        // We need to access initParamsArea in onConnect, so we'll store it as a field or use a getter.
+        // For simplicity, let's make it a class field or final here to access in closure? 
+        // Better: make it a class field.
+        this.initParamsArea = initParamsArea; // Assign to field
+
+        // To fit it in, let's wrap mTLS and InitParams in a south panel?
+        // Or just add it to a wrapper panel.
+        
+        // Re-jig layout:
+        // Center: Headers (Variable)
+        // South: Wrapper (mTLS + InitParams)
+        
+        JPanel bottomWrapper = new JPanel(new BorderLayout());
+        bottomWrapper.add(mtlsPanel, BorderLayout.NORTH);
+        bottomWrapper.add(initParamsPanel, BorderLayout.SOUTH);
+        
+        panel.add(bottomWrapper, BorderLayout.SOUTH);
         
         return panel;
     }
+    
+    // Add field for init params
+    private JTextArea initParamsArea;
     
     private void toggleMtlsFields(boolean enabled) {
         certPathField.setEnabled(enabled);
@@ -291,6 +334,9 @@ public class ConnectionDialog extends JDialog {
             configuration.setClientCertPassword(new String(certPasswordField.getPassword()));
         }
         
+        // Parse Init Params
+        configuration.setInitializationOptions(initParamsArea.getText());
+
         confirmed = true;
         dispose();
     }

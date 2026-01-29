@@ -41,16 +41,25 @@ The resulting JAR will be located at `build/libs/mcp-asd.jar`.
 - The **Auto-Detect Endpoints** feature identifies common MCP paths.
 - Connection settings (host, port, headers, certificates) are persisted for the duration of the session.
 
-### 2. Authentication Visibility Note
+### 2. Authentication
+The connection dialog includes a dedicated "Authentication" tab supporting three strategies:
+
+*   **HTTP Headers:** Add custom headers (e.g., `Authorization: Bearer <token>`, `X-API-Key: <key>`) to the transport connection.
+*   **mTLS (Mutual TLS):** Provide a PKCS#12 (`.p12`) client certificate and password. This allows the extension to handshake with servers requiring client-side certificates.
+*   **Initialization Parameters:** Inject custom JSON fields into the MCP `initialize` handshake.
+    *   *Usage:* Paste a JSON object (e.g., `{"apiKey": "secret", "env": "prod"}`) into the text area.
+    *   *Effect:* These fields are merged into the `params` object of the `initialize` JSON-RPC message sent immediately after connection.
+
+### 3. Authentication Visibility Note
 **Important:** MCP-ASD manages authentication and transport-level security (mTLS) internally. When you configure headers or certificates in the connection dialog, they are injected into the real transport connection by the extension. **You will not see these headers in Repeater or Intruder requests**, as those requests are sent to the extension's internal virtual bridge.
 
-### 3. Mapping and Enumeration
+### 4. Mapping and Enumeration
 Upon connection, the extension populates the dashboard with identified primitives:
 - **Tools:** Executable functions.
 - **Resources:** Data sources or files.
 - **Prompts:** Pre-defined templates.
 
-### 4. Security Testing
+### 5. Security Testing
 - **Send to Repeater:** Manually test tool invocations. Repeater tabs are automatically named (e.g., `MCP: get_weather`) for easy identification.
 - **Send to Intruder:** Perform concurrent fuzzing. The extension ensures thread-safe correlation of requests and responses.
 - **Active Scan:** Right-click a tool in the dashboard to perform automated security checks. The extension currently supports Type Confusion and basic Injection probing.
@@ -60,7 +69,7 @@ A mock MCP server is included for testing the extension's features.
 
 ### Requirements
 ```bash
-pip install fastapi uvicorn[standard] websockets sse-starlette
+pip install -r requirements.txt
 ```
 
 ### Execution

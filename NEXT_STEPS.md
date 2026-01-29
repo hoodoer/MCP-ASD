@@ -1,32 +1,28 @@
-# Future Development Roadmap (Phase 2 & 3)
+# Next Steps: Phase 3 & Beyond
 
-## Phase 2: Refinement & Integration (Remaining Tasks)
-
-### 1. Native Burp Issue Reporting
-*   **Goal:** Integrate findings into Burp's "Target" and "Dashboard" tabs instead of just the Event Log.
-*   **Action:** Implement `IScanIssue` and `IAuditIssue` interfaces from the Montoya API.
-*   **Details:**
-    *   Create a `McpScanIssue` class implementing `IScanIssue`.
-    *   Update `SecurityTester` to call `api.siteMap().add(new McpScanIssue(...))` upon finding a vulnerability.
-
-### 2. Deep Parameter Analysis (Schema Fuzzing)
-*   **Goal:** Handle complex, nested JSON objects in Tool arguments.
-*   **Action:** Upgrade the `EnumerationEngine` and `DashboardTab` prototype generator.
-*   **Details:**
-    *   Currently, the tool handles flat arguments well.
-    *   Need a recursive parser for `oneOf`, `anyOf`, and nested `object` types in JSON Schemas.
-    *   Generate fuzzing payloads that respect these constraints (e.g., generating valid nested JSON structures to test business logic deeper than just top-level fields).
+With Phase 2 (Authentication & Basic Scanning) complete, the project focus shifts to **Deep Integration** and **Advanced Fuzzing**.
 
 ## Phase 3: Advanced Capabilities
 
-### 1. Automated "Intelligent" Fuzzing
-*   **Goal:** Use LLM-assisted fuzzing or smarter heuristics.
-*   **Action:** Instead of random types, analyze the `description` field of a tool (e.g., "Expects a SQL query") to inject context-aware payloads (e.g., `' OR 1=1 --`).
+### 1. Native Burp Issue Reporting (High Priority)
+*   **Objective:** Move vulnerability reporting out of the "Event Log" and into the standard Burp "Target" and "Dashboard" tabs.
+*   **Tasks:**
+    *   Implement `burp.api.montoya.scanner.audit.issues.AuditIssue`.
+    *   Update `SecurityTester` to register these issues via `api.siteMap().add()`.
 
-### 2. Session Management / Macros
-*   **Goal:** Support complex workflows where Tool A must be called before Tool B.
-*   **Action:** Allow users to define a "Login Tool" or "Setup Sequence" that runs automatically before every scan or manual request.
+### 2. Deep Parameter Analysis
+*   **Objective:** Support complex, real-world Tool schemas.
+*   **Tasks:**
+    *   Update `EnumerationEngine` to parse nested JSON objects, `oneOf`, and `anyOf` definitions.
+    *   Generate fuzzing payloads that validate structural correctness while fuzzing values.
 
-### 3. Standalone Mode
-*   **Goal:** Run MCP-ASD as a CLI tool without Burp Suite (optional).
-*   **Action:** Decouple the `EnumerationEngine` from the Montoya API to allow CI/CD integration.
+### 3. Intelligent Fuzzing
+*   **Objective:** Context-aware attacks.
+*   **Tasks:**
+    *   Parse `description` fields (e.g., "SQL query to execute") to select specific payload lists (SQLi vs XSS).
+
+### 4. Standalone Mode (Optional)
+*   **Objective:** Run without Burp Suite for CI/CD pipelines.
+*   **Tasks:**
+    *   Decouple `EnumerationEngine` from Montoya API.
+    *   Create a CLI wrapper.

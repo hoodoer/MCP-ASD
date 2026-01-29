@@ -14,6 +14,8 @@ public class ConnectionConfiguration {
     private boolean useMtls;
     private String clientCertPath;
     private String clientCertPassword;
+    
+    private String initializationOptions;
 
     public ConnectionConfiguration(String host, int port, String transport, String path) {
         this.host = host;
@@ -39,4 +41,7 @@ public class ConnectionConfiguration {
 
     public String getClientCertPassword() { return clientCertPassword; }
     public void setClientCertPassword(String clientCertPassword) { this.clientCertPassword = clientCertPassword; }
+
+    public String getInitializationOptions() { return initializationOptions; }
+    public void setInitializationOptions(String initializationOptions) { this.initializationOptions = initializationOptions; }
 }

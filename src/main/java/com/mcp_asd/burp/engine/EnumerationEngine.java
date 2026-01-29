@@ -18,6 +18,7 @@ public class EnumerationEngine implements TransportListener {
     private McpTransport transport;
     private CountDownLatch latch;
     private volatile boolean connectionFailed = false;
+    private ConnectionConfiguration currentConfig;
 
     public EnumerationEngine(MontoyaApi api, DashboardTab dashboardTab, SecurityTester tester, SessionStore sessionStore) {
         this.api = api;
@@ -31,6 +32,7 @@ public class EnumerationEngine implements TransportListener {
     }
 
     public void start(ConnectionConfiguration config) {
+        this.currentConfig = config;
         String host = config.getHost();
         int port = config.getPort();
         String transportType = config.getTransport();
@@ -90,7 +92,29 @@ public class EnumerationEngine implements TransportListener {
         if (dashboardTab != null) dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
         
         // Trigger initial discovery
-        sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":\"" + java.util.UUID.randomUUID() + "\"}");
+        JSONObject initParams = new JSONObject();
+        initParams.put("protocolVersion", "2024-11-05");
+        initParams.put("capabilities", new JSONObject());
+        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "0.5.0"));
+        
+        if (currentConfig != null && currentConfig.getInitializationOptions() != null && !currentConfig.getInitializationOptions().trim().isEmpty()) {
+            try {
+                JSONObject userParams = new JSONObject(currentConfig.getInitializationOptions());
+                for (String key : userParams.keySet()) {
+                    initParams.put(key, userParams.get(key));
+                }
+            } catch (Exception e) {
+                api.logging().logToError("Invalid JSON in Initialization Options: " + e.getMessage());
+            }
+        }
+        
+        JSONObject initRequest = new JSONObject();
+        initRequest.put("jsonrpc", "2.0");
+        initRequest.put("method", "initialize");
+        initRequest.put("params", initParams);
+        initRequest.put("id", java.util.UUID.randomUUID().toString());
+
+        sendRequest(initRequest.toString());
         sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":\"" + java.util.UUID.randomUUID() + "\"}");
         sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"resources/list\",\"id\":\"" + java.util.UUID.randomUUID() + "\"}");
         sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"prompts/list\",\"id\":\"" + java.util.UUID.randomUUID() + "\"}");

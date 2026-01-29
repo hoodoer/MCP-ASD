@@ -100,6 +100,7 @@ async def handle_mcp_request(request_data):
     }
 
     if method == "initialize":
+        print(f"DEBUG: Received initialization params: {params}")
         response["result"] = {"version": "0.1.0", "capabilities": {}}
         await broadcast_message(response)
         await asyncio.sleep(0.1)

@@ -76,7 +76,7 @@ public class DashboardTab extends JComponent {
         
         JButton aboutButton = new JButton("About");
         aboutButton.addActionListener(e -> JOptionPane.showMessageDialog(this, 
-                "MCP Attack Surface Detector\n\nA Burp Suite extension for discovering and testing\nModel Context Protocol (MCP) servers.\n\nVersion: 1.0\nAuthor: Hoodoer", 
+                "MCP Attack Surface Detector\n\nA Burp Suite extension for discovering and testing\nModel Context Protocol (MCP) servers.\n\nVersion: 0.5.0 (Alpha)\nAuthor: Hoodoer", 
                 "About MCP-ASD", 
                 JOptionPane.INFORMATION_MESSAGE));
 
