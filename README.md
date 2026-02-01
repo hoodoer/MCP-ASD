@@ -1,5 +1,5 @@
 # MCP Attack Surface Detector (MCP-ASD)
-**Version: 0.5.1 (Alpha)**
+**Version: 0.5.2 (Alpha)**
 
 Note: This project is very alpha, your mileage may very with this as I test it across different MCP servers to make sure it's a generic approach. Any and all feedback, and free testing are welcomed :)
 

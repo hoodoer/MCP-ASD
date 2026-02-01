@@ -114,7 +114,7 @@ async def handle_mcp_request(request_data):
     elif method == "prompts/list":
         response["result"] = PROMPTS
         await broadcast_message(response)
-    elif method == "tools/invoke":
+    elif method == "tools/call" or method == "tools/invoke":
         tool_name = params.get("name")
         tool_params = params.get("arguments", {})
         if tool_name == "get_weather":

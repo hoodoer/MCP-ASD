@@ -25,6 +25,10 @@ public class EnumerationEngine implements TransportListener {
     private String toolsRequestId;
     private String resourcesRequestId;
     private String promptsRequestId;
+    
+    private boolean toolsDone = false;
+    private boolean resourcesDone = false;
+    private boolean promptsDone = false;
 
     public EnumerationEngine(MontoyaApi api, DashboardTab dashboardTab, SecurityTester tester, SessionStore sessionStore) {
         this.api = api;
@@ -42,6 +46,9 @@ public class EnumerationEngine implements TransportListener {
         
         // Reset state
         this.connectionFailed = false;
+        this.toolsDone = false;
+        this.resourcesDone = false;
+        this.promptsDone = false;
 
         if (dashboardTab != null) {
             dashboardTab.setTarget(config.getHost(), config.getPort());
@@ -89,7 +96,7 @@ public class EnumerationEngine implements TransportListener {
             }
             
             api.logging().logToOutput("Handshake successful. Connection secured.");
-            if (dashboardTab != null) dashboardTab.setStatus("🟢 Connected & Ready", java.awt.Color.GREEN.darker());
+            // Status remains "Enumerating..." set by onMessage
             return true;
 
         } catch (Exception e) {
@@ -198,29 +205,43 @@ public class EnumerationEngine implements TransportListener {
                 }
 
                 if (id.equals(toolsRequestId)) {
+                    toolsDone = true;
                     if (json.has("result")) {
                         SwingUtilities.invokeLater(() -> dashboardTab.updateTools(json.getJSONObject("result")));
                     } else if (json.has("error")) {
                          api.logging().logToError("Tools Enumeration Failed: " + json.getJSONObject("error").toString());
                     }
+                    checkEnumerationComplete();
                 } 
                 else if (id.equals(resourcesRequestId)) {
+                    resourcesDone = true;
                     if (json.has("result")) {
                         SwingUtilities.invokeLater(() -> dashboardTab.updateResources(json.getJSONObject("result")));
                     } else if (json.has("error")) {
                          api.logging().logToError("Resources Enumeration Failed: " + json.getJSONObject("error").toString());
                     }
+                    checkEnumerationComplete();
                 } 
                 else if (id.equals(promptsRequestId)) {
+                    promptsDone = true;
                     if (json.has("result")) {
                         SwingUtilities.invokeLater(() -> dashboardTab.updatePrompts(json.getJSONObject("result")));
                     } else if (json.has("error")) {
                          api.logging().logToError("Prompts Enumeration Failed: " + json.getJSONObject("error").toString());
                     }
+                    checkEnumerationComplete();
                 }
             }
         } catch (Exception e) {
             api.logging().logToError("Failed to parse event JSON: " + e.getMessage());
+        }
+    }
+    
+    private void checkEnumerationComplete() {
+        if (toolsDone && resourcesDone && promptsDone) {
+            if (dashboardTab != null) {
+                dashboardTab.setStatus("🟢 Connected & Ready", java.awt.Color.GREEN.darker());
+            }
         }
     }
 

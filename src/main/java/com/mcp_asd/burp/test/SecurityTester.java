@@ -1,8 +1,6 @@
 package com.mcp_asd.burp.test;
 
 import burp.api.montoya.MontoyaApi;
-
-import burp.api.montoya.MontoyaApi;
 import com.mcp_asd.burp.engine.EnumerationEngine;
 import com.mcp_asd.burp.engine.SessionStore;
 import com.mcp_asd.burp.ui.AttackSurfaceNode;
@@ -179,7 +177,7 @@ public class SecurityTester {
         request.put("jsonrpc", "2.0");
         String id = java.util.UUID.randomUUID().toString();
         request.put("id", id);
-        request.put("method", "tools/invoke");
+        request.put("method", "tools/call");
 
         JSONObject params = new JSONObject();
         params.put("name", toolName);

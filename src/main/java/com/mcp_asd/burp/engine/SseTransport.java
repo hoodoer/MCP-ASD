@@ -175,10 +175,22 @@ public class SseTransport implements McpTransport {
                 if (postEndpointUrl != null) {
                     url = postEndpointUrl;
                 } else {
-                    api.logging().logToError("SseTransport: Warning - Sending message before 'endpoint' event received. Using default path.");
-                    url = "http://" + config.getHost() + ":" + config.getPort() + config.getPath();
-                    if (config.isUseTls() || config.isUseMtls()) {
-                        url = url.replace("http://", "https://");
+                    // Wait briefly for endpoint event (race condition fix)
+                    // Some servers (CoinAPI) send 'endpoint' immediately after onOpen.
+                    // Others (DeepWiki) don't send it at all.
+                    for (int i = 0; i < 20; i++) { // Wait up to 2 seconds
+                        if (postEndpointUrl != null) break;
+                        try { Thread.sleep(100); } catch (Exception ignored) {}
+                    }
+
+                    if (postEndpointUrl != null) {
+                        url = postEndpointUrl;
+                    } else {
+                        api.logging().logToError("SseTransport: Warning - Sending message before 'endpoint' event received. Using default path.");
+                        url = "http://" + config.getHost() + ":" + config.getPort() + config.getPath();
+                        if (config.isUseTls() || config.isUseMtls()) {
+                            url = url.replace("http://", "https://");
+                        }
                     }
                 }
 

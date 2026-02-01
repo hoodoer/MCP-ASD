@@ -92,6 +92,7 @@ public class DashboardTab extends JComponent {
                 ConnectionDialog dialog = new ConnectionDialog(null, "localhost", 8000, lastConfig);
                 dialog.setVisible(true);
                 if (dialog.isConfirmed()) {
+                    clearData(); // Clear UI immediately
                     lastConfig = dialog.getConfiguration(); // Save it
                     if (connectionListener != null) {
                         connectionListener.onConnect(lastConfig);
@@ -210,6 +211,21 @@ public class DashboardTab extends JComponent {
         this.serverInfo = info;
         SwingUtilities.invokeLater(() -> {
             if (serverInfoButton != null) serverInfoButton.setEnabled(true);
+        });
+    }
+
+    public void clearData() {
+        SwingUtilities.invokeLater(() -> {
+            toolsModel.clear();
+            resourcesModel.clear();
+            promptsModel.clear();
+            metadataInspector.setText("Select an item on the left to generate a request...");
+            sendToRepeaterButton.setEnabled(false);
+            sendToIntruderButton.setEnabled(false);
+            if (serverInfoButton != null) serverInfoButton.setEnabled(false);
+            serverInfo = null;
+            headerLabel.setText("Target: Connecting...");
+            statusLabel.setText("⚪ Status: Resetting...");
         });
     }
 
@@ -370,7 +386,7 @@ public class DashboardTab extends JComponent {
         requestJson.put("id", java.util.UUID.randomUUID().toString());
 
         if ("Tools".equals(parentCategory)) {
-            requestJson.put("method", "tools/invoke");
+            requestJson.put("method", "tools/call");
             JSONObject params = new JSONObject();
             params.put("name", methodName);
             
