@@ -97,6 +97,10 @@ The connection dialog includes a dedicated "Authentication" tab supporting three
     *   *Usage:* Paste a JSON object (e.g., `{"apiKey": "secret", "env": "prod"}`) into the text area.
     *   *Effect:* These fields are merged into the `params` object of the `initialize` JSON-RPC message sent immediately after connection.
 
+<img width="631" height="931" alt="image" src="https://github.com/user-attachments/assets/858617b4-a7fa-4e36-b195-ec9abd67f463" />  
+
+*Figure 7: Configure authentication*
+
 ### 4. Authentication Visibility Note
 **Important:** MCP-ASD manages authentication and transport-level security (mTLS) internally. When you configure headers or certificates in the connection dialog, they are injected into the real transport connection by the extension. **You will not see these headers in Repeater or Intruder requests**, as those requests are sent to the extension's internal virtual bridge.
 
@@ -108,11 +112,11 @@ Upon connection, the extension populates the dashboard with identified primitive
 
 <img width="1354" height="904" alt="image" src="https://github.com/user-attachments/assets/23ffe577-1a47-4a8a-931f-e19885488da7" />  
 
-*Figure 7: MCP primatives enumerated*  
+*Figure 8: MCP primatives enumerated*  
 
 <img width="79" height="68" alt="image" src="https://github.com/user-attachments/assets/8f2ded37-ca9a-440d-829e-499483277fe8" />  
 
-*Figure 8: Select primative to generate request prototype*
+*Figure 9: Select primative to generate request prototype*
 
 
 
@@ -122,7 +126,7 @@ Upon connection, the extension populates the dashboard with identified primitive
 
 <img width="1346" height="632" alt="image" src="https://github.com/user-attachments/assets/1e697b53-db36-4970-8007-8547c31e5e41" />  
 
-*Figure 9: Syncronous bridge allows request/response style Repeater and Intruder usage*
+*Figure 10: Syncronous bridge allows request/response style Repeater and Intruder usage*
 
 
 ### 7. Server Information
@@ -131,7 +135,7 @@ Upon connection, the extension populates the dashboard with identified primitive
 
 <img width="1322" height="816" alt="image" src="https://github.com/user-attachments/assets/ee8ae5d0-329e-4f80-926a-2edc812145bc" />  
 
-*Figure 10: Server information provided by some MCP servers*
+*Figure 11: Server information provided by some MCP servers*
 
 ## How it Works (Architecture)
 
