@@ -77,7 +77,8 @@ Click the **Settings** button in the top header to configure advanced options:
     *   **Active Detection:** Automatically probes new domains for common MCP endpoints (`/mcp`, `/sse`, `/ws`, etc.) when they are first encountered.
     *   **Limit to In-Scope:** Restricts active detection probes to domains that are in your Burp Target Scope (Recommended).
 
-<img width="898" height="813" alt="image" src="https://github.com/user-attachments/assets/bde2a6bc-6ab9-4c61-abf6-d882b8e0a870" />  
+<img width="1108" height="803" alt="image" src="https://github.com/user-attachments/assets/f598284b-a0d2-426f-8f95-8cd7793ecaed" />  
+
 
 *Figure 5: MCP ASD settings*
 
