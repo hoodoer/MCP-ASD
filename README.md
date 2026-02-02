@@ -81,6 +81,11 @@ Click the **Settings** button in the top header to configure advanced options:
 
 *Figure 5: MCP ASD settings*
 
+<img width="682" height="742" alt="image" src="https://github.com/user-attachments/assets/7eb050cc-7cf3-4981-b1d2-aa53e0be9125" />  
+
+*Figure 6: MCP server active detection alert*
+
+
 
 ### 3. Authentication
 The connection dialog includes a dedicated "Authentication" tab supporting three strategies:
@@ -102,11 +107,11 @@ Upon connection, the extension populates the dashboard with identified primitive
 
 <img width="1354" height="904" alt="image" src="https://github.com/user-attachments/assets/23ffe577-1a47-4a8a-931f-e19885488da7" />  
 
-*Figure 6: MCP primatives enumerated*  
+*Figure 7: MCP primatives enumerated*  
 
 <img width="79" height="68" alt="image" src="https://github.com/user-attachments/assets/8f2ded37-ca9a-440d-829e-499483277fe8" />  
 
-*Figure 7: Select primative to generate request prototype*
+*Figure 8: Select primative to generate request prototype*
 
 
 
@@ -116,7 +121,7 @@ Upon connection, the extension populates the dashboard with identified primitive
 
 <img width="1346" height="632" alt="image" src="https://github.com/user-attachments/assets/1e697b53-db36-4970-8007-8547c31e5e41" />  
 
-*Figure 8: Syncronous bridge allows request/response style Repeater and Intruder usage*
+*Figure 9: Syncronous bridge allows request/response style Repeater and Intruder usage*
 
 
 ### 7. Server Information
@@ -125,7 +130,7 @@ Upon connection, the extension populates the dashboard with identified primitive
 
 <img width="1322" height="816" alt="image" src="https://github.com/user-attachments/assets/ee8ae5d0-329e-4f80-926a-2edc812145bc" />  
 
-*Figure 9: Server information provided by some MCP servers*
+*Figure 10: Server information provided by some MCP servers*
 
 ## How it Works (Architecture)
 
