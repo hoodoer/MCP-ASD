@@ -42,6 +42,10 @@ public class ScanHandler implements HttpHandler {
         this.settings = settings;
         rebuildClient();
     }
+    
+    public void shutdown() {
+        probeExecutor.shutdownNow();
+    }
 
     private void rebuildClient() {
         // Create a trust manager that does not validate certificate chains

@@ -1,7 +1,5 @@
 # MCP Attack Surface Detector (MCP-ASD)
-**Version: 0.6.0 (Alpha)**
-
-Note: This project is very alpha, your mileage may very with this as I test it across different MCP servers to make sure it's a generic approach. Any and all feedback, and free testing are welcomed :)
+**Version: 1.0**
 
 MCP-ASD is a Burp Suite extension (Montoya API) designed to identify, map, and test the attack surface of Model Context Protocol (MCP) servers. 
 
@@ -14,9 +12,8 @@ It provides a bridge between Burp's synchronous testing tools (Repeater, Intrude
 - **Attack Surface Enumeration:** Automatically discovers and visualizes Tools, Resources, and Prompts, including schema extraction for arguments.
 - **Synchronous Bridging:** Enables seamless use of Burp Repeater and Intruder by handling asynchronous ID correlation and session management.
 - **Prototype Generation:** Automatically generates valid JSON-RPC payloads based on discovered tool schemas.
-- **Security Scanning:** Initial support for Active Scanning, including Type Confusion (crash/leak detection) and Injection probing.
 - **Authentication & mTLS:** Support for custom HTTP headers (OAuth Bearer tokens, API keys) and mTLS client certificates (PKCS#12).
-- **Native Integration:** Reports discovered MCP servers and vulnerabilities directly to Burp's **Target** and **Dashboard** (Issue Activity).
+- **Native Integration:** Reports discovered MCP servers directly to Burp's **Target** and **Dashboard**.
 - **Advanced Detection:** Includes passive monitoring and active probing for MCP servers on discovered domains.
 
 ## Installation
@@ -79,11 +76,34 @@ Upon connection, the extension populates the dashboard with identified primitive
 ### 6. Security Testing
 - **Send to Repeater:** Manually test tool invocations. Repeater tabs are automatically named (e.g., `MCP: get_weather`) for easy identification.
 - **Send to Intruder:** Perform concurrent fuzzing. The extension ensures thread-safe correlation of requests and responses.
-- **Active Scan:** Right-click a tool in the dashboard to perform automated security checks. The extension currently supports Type Confusion and basic Injection probing. **Note:** Results are currently logged to the Extension's **Output** tab.
 
 ### 7. Server Information
 - Click the **Server Info** button in the top header to view detailed metadata about the connected MCP server.
 - This includes the server name, version, protocol version, supported capabilities, and the full System Instructions (prompts).
+
+## How it Works (Architecture)
+
+MCP-ASD solves a fundamental impedance mismatch between Burp Suite and the Model Context Protocol:
+*   **Burp Suite** is optimized for synchronous, stateless HTTP (Request -> Response).
+*   **MCP** relies on asynchronous, persistent connections (Server-Sent Events or WebSockets) where messages (JSON-RPC) can flow in any direction at any time, often without a 1:1 request/response correlation at the transport layer.
+
+To bridge this gap, MCP-ASD implements a novel **"Virtual Proxy" Architecture**:
+
+### 1. Asynchronous Transport Layer
+Unlike standard Burp extensions that use `Burp.Http`, MCP-ASD utilizes a dedicated, robust HTTP client (`OkHttp`) to manage the persistent MCP connection.
+*   **Justification:** Standard HTTP clients (including Burp's native API) block waiting for a response body to complete. For SSE (Server-Sent Events), the response body is an infinite stream that never completes. Attempting to read it with standard methods causes the thread to hang indefinitely.
+*   **Solution:** The extension maintains a dedicated background thread that reads the infinite stream event-by-event, decoupled from the Burp UI.
+
+### 2. The Synchronous Bridge
+When you send a request from Burp Repeater or Intruder:
+1.  **Virtual Endpoint:** You send a standard HTTP POST request to `http://mcp-asd.local/invoke`.
+2.  **Interception:** The extension's `HttpHandler` intercepts this request before it leaves Burp.
+3.  **Automatic ID Correlation:** The extension **automatically overwrites the `id` field** in your JSON with a unique UUID. This ensures that even in high-concurrency Intruder attacks, every request is perfectly correlated to its specific response. **You do not need to manually change the ID in Repeater.**
+4.  **Injection:** It injects the message into the *active* persistent SSE/WebSocket connection.
+5.  **Thread Blocking:** The extension pauses the Burp request thread and waits.
+6.  **Stitching:** When the matching JSON-RPC response arrives from the server, the extension "stitches" it into a standard HTTP 200 OK response and returns it to Burp.
+
+This allows you to fuzz MCP tools using Intruder's powerful payloads without breaking the persistent connection or needing to re-authenticate for every fuzzing attempt.
 
 ## Development Test Server
 A mock MCP server is included for testing the extension's features.
@@ -98,14 +118,6 @@ pip install -r requirements.txt
 python3 mcp_server.py
 ```
 The server supports authentication (Bearer token: `bearer-token-123`) and includes vulnerable endpoints (`echo_input`, `crash_me`) for verifying scanner functionality.
-
-## Architecture
-MCP-ASD implements a transparent internal proxy to bridge asynchronous MCP traffic to Burp's synchronous model:
-1. Burp sends a request to the extension's virtual endpoint.
-2. The extension decorates the request with a unique JSON-RPC ID.
-3. The request is dispatched over the active SSE or WebSocket transport.
-4. The extension blocks the Burp thread and monitors the incoming event stream for a matching ID.
-5. Once found, the result is packaged as an HTTP response and returned to Burp.
 
 ## Contact
 Drew Kirkpatrick  

@@ -20,17 +20,21 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class McpProxy implements burp.api.montoya.http.handler.HttpHandler {
     private final MontoyaApi api;
     private final SessionStore sessionStore;
     private final EnumerationEngine engine;
     private volatile int internalPort; // Ensure visibility across threads
+    private final ExecutorService executorService;
 
     public McpProxy(MontoyaApi api, SessionStore sessionStore, EnumerationEngine engine) {
         this.api = api;
         this.sessionStore = sessionStore;
         this.engine = engine;
+        this.executorService = Executors.newCachedThreadPool(); // Use cached pool for Intruder bursts
         startInternalServer();
     }
 
@@ -49,7 +53,7 @@ public class McpProxy implements burp.api.montoya.http.handler.HttpHandler {
                     try {
                         Socket clientSocket = serverSocket.accept();
                         // clientSocket.setSoTimeout(30000); // Optional: Read timeout
-                        new Thread(() -> handleClient(clientSocket)).start();
+                        executorService.submit(() -> handleClient(clientSocket));
                     } catch (IOException e) {
                         api.logging().logToError("Error accepting connection: " + e.getMessage());
                     }
@@ -111,7 +115,7 @@ public class McpProxy implements burp.api.montoya.http.handler.HttpHandler {
                             engine.sendRequest(newRequestBody);
                 
                             // 3. Wait for Response (Block)                api.logging().logToOutput("InternalProxy: Waiting for response...");
-                JSONObject jsonResponse = future.get(15, TimeUnit.SECONDS);
+                JSONObject jsonResponse = future.get(60, TimeUnit.SECONDS);
                 api.logging().logToOutput("InternalProxy: Response received: " + jsonResponse.toString());
                 
                 String responseString = jsonResponse.toString();

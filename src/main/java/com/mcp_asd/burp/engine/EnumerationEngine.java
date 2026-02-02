@@ -2,10 +2,10 @@ package com.mcp_asd.burp.engine;
 
 import burp.api.montoya.MontoyaApi;
 import com.mcp_asd.burp.GlobalSettings;
-import com.mcp_asd.burp.test.SecurityTester;
 import com.mcp_asd.burp.ui.DashboardTab;
 import com.mcp_asd.burp.ui.ConnectionConfiguration;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import javax.swing.SwingUtilities;
 import java.util.concurrent.CountDownLatch;
@@ -16,11 +16,11 @@ public class EnumerationEngine implements TransportListener {
     private final GlobalSettings settings;
     private DashboardTab dashboardTab;
     private final SessionStore sessionStore;
-    private final SecurityTester tester;
     private McpTransport transport;
     private CountDownLatch latch;
     private volatile boolean connectionFailed = false;
     private ConnectionConfiguration currentConfig;
+    private volatile boolean cancelled = false;
     
     // Request IDs for tracking enumeration responses
     private String initializeRequestId;
@@ -32,10 +32,9 @@ public class EnumerationEngine implements TransportListener {
     private boolean resourcesDone = false;
     private boolean promptsDone = false;
 
-    public EnumerationEngine(MontoyaApi api, DashboardTab dashboardTab, SecurityTester tester, SessionStore sessionStore, GlobalSettings settings) {
+    public EnumerationEngine(MontoyaApi api, DashboardTab dashboardTab, SessionStore sessionStore, GlobalSettings settings) {
         this.api = api;
         this.dashboardTab = dashboardTab;
-        this.tester = tester;
         this.sessionStore = sessionStore;
         this.settings = settings;
     }
@@ -43,8 +42,6 @@ public class EnumerationEngine implements TransportListener {
     public void setDashboardTab(DashboardTab dashboardTab) {
         this.dashboardTab = dashboardTab;
     }
-
-    private volatile boolean cancelled = false;
 
     public void cancel() {
         this.cancelled = true;
@@ -159,7 +156,7 @@ public class EnumerationEngine implements TransportListener {
         JSONObject initParams = new JSONObject();
         initParams.put("protocolVersion", "2024-11-05");
         initParams.put("capabilities", new JSONObject());
-        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "0.6.0"));
+        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "1.0"));
         
         if (currentConfig != null && currentConfig.getInitializationOptions() != null && !currentConfig.getInitializationOptions().trim().isEmpty()) {
             try {
@@ -185,12 +182,26 @@ public class EnumerationEngine implements TransportListener {
 
     @Override
     public void onMessage(String data) {
+        if (data == null || data.trim().isEmpty()) return;
+        
         api.logging().logToOutput("Received event data: " + data);
         try {
-            JSONObject json = new JSONObject(data);
+            JSONObject json = null;
+            if (data.trim().startsWith("[")) {
+                // Handle batch response or empty array (keep-alive?)
+                JSONArray arr = new JSONArray(data);
+                if (arr.length() > 0 && arr.get(0) instanceof JSONObject) {
+                    json = arr.getJSONObject(0); // Process first item for now
+                } else {
+                    api.logging().logToOutput("Received array response, ignoring: " + data);
+                    return;
+                }
+            } else {
+                json = new JSONObject(data);
+            }
             
             // 1. Correlation Logic for Proxy
-            if (json.has("id") && !json.isNull("id")) {
+            if (json != null && json.has("id") && !json.isNull("id")) {
                 String msgId = json.getString("id");
                 if (sessionStore.getRequest(msgId) != null) {
                     api.logging().logToOutput("Engine: Found matching pending request for ID: " + msgId);
@@ -199,8 +210,9 @@ public class EnumerationEngine implements TransportListener {
             }
 
             // 2. Enumeration Logic
-            if (json.has("id") && !json.isNull("id")) {
+            if (json != null && json.has("id") && !json.isNull("id")) {
                 String id = json.getString("id");
+                final JSONObject finalJson = json; // Create final reference for lambdas
                 
                 // Handshake Response
                 if (id.equals(initializeRequestId)) {
@@ -216,7 +228,7 @@ public class EnumerationEngine implements TransportListener {
                      if (dashboardTab != null) {
                          dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
                          if (json.has("result")) {
-                             dashboardTab.updateServerInfo(json.getJSONObject("result"));
+                             dashboardTab.updateServerInfo(finalJson.getJSONObject("result"));
                          }
                      }
                      
@@ -244,7 +256,7 @@ public class EnumerationEngine implements TransportListener {
                 if (id.equals(toolsRequestId)) {
                     toolsDone = true;
                     if (json.has("result")) {
-                        SwingUtilities.invokeLater(() -> dashboardTab.updateTools(json.getJSONObject("result")));
+                        SwingUtilities.invokeLater(() -> dashboardTab.updateTools(finalJson.getJSONObject("result")));
                     } else if (json.has("error")) {
                          api.logging().logToError("Tools Enumeration Failed: " + json.getJSONObject("error").toString());
                     }
@@ -253,7 +265,7 @@ public class EnumerationEngine implements TransportListener {
                 else if (id.equals(resourcesRequestId)) {
                     resourcesDone = true;
                     if (json.has("result")) {
-                        SwingUtilities.invokeLater(() -> dashboardTab.updateResources(json.getJSONObject("result")));
+                        SwingUtilities.invokeLater(() -> dashboardTab.updateResources(finalJson.getJSONObject("result")));
                     } else if (json.has("error")) {
                          api.logging().logToError("Resources Enumeration Failed: " + json.getJSONObject("error").toString());
                     }
@@ -262,7 +274,7 @@ public class EnumerationEngine implements TransportListener {
                 else if (id.equals(promptsRequestId)) {
                     promptsDone = true;
                     if (json.has("result")) {
-                        SwingUtilities.invokeLater(() -> dashboardTab.updatePrompts(json.getJSONObject("result")));
+                        SwingUtilities.invokeLater(() -> dashboardTab.updatePrompts(finalJson.getJSONObject("result")));
                     } else if (json.has("error")) {
                          api.logging().logToError("Prompts Enumeration Failed: " + json.getJSONObject("error").toString());
                     }
@@ -271,6 +283,28 @@ public class EnumerationEngine implements TransportListener {
             }
         } catch (Exception e) {
             api.logging().logToError("Failed to parse event JSON: " + e.getMessage());
+            api.logging().logToError("Raw Data was: [" + data + "]");
+            
+            // Attempt recovery: Sometimes data comes as "data: {json}" but we stripped "data: ".
+            // If it's just a raw string like "Connection established", ignore.
+            // But if it looks like JSON, maybe we can clean it?
+            
+            // Critical: If we can't parse it, we must check if it's a response to a pending request.
+            // Since we can't parse the ID, we can't correlate it easily.
+            // However, we can try to extract ID via regex as a fallback.
+            try {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"id\"\s*:\s*\"([^\"]+)\"").matcher(data);
+                if (m.find()) {
+                    String id = m.group(1);
+                    if (sessionStore.getRequest(id) != null) {
+                        JSONObject errorResponse = new JSONObject();
+                        errorResponse.put("jsonrpc", "2.0");
+                        errorResponse.put("id", id);
+                        errorResponse.put("error", new JSONObject().put("code", -32700).put("message", "Parse Error: Server returned invalid JSON").put("data", data));
+                        sessionStore.completeRequest(id, errorResponse);
+                    }
+                }
+            } catch (Exception ignored) {}
         }
     }
     

@@ -14,7 +14,9 @@ import org.jetbrains.annotations.NotNull;
 
 import java.net.InetSocketAddress;
 import java.net.Proxy;
+import java.net.URL; // Add URL import
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch; // Add CountDownLatch import
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.MediaType;
@@ -34,6 +36,7 @@ public class SseTransport implements McpTransport {
     private volatile String postEndpointUrl;
     private boolean forceHttp1 = false;
     private final java.util.concurrent.atomic.AtomicBoolean onOpenCalled = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final CountDownLatch endpointLatch = new CountDownLatch(1); // Add Latch
 
     public SseTransport(MontoyaApi api, GlobalSettings settings) {
         this.api = api;
@@ -120,7 +123,10 @@ public class SseTransport implements McpTransport {
         EventSourceListener esListener = new EventSourceListener() {
             @Override
             public void onOpen(@NotNull EventSource eventSource, @NotNull okhttp3.Response response) {
-                api.logging().logToOutput("SseTransport: Connection opened. Headers: " + response.headers());
+                try {
+                    api.logging().logToOutput("SseTransport: Connection opened. Headers: " + response.headers());
+                } catch (Exception ignored) {} // Catch NPE during unload
+                
                 if (onOpenCalled.compareAndSet(false, true)) {
                     listener.onOpen();
                 }
@@ -128,18 +134,48 @@ public class SseTransport implements McpTransport {
 
             @Override
             public void onEvent(@NotNull EventSource eventSource, String id, String type, @NotNull String data) {
-                // ... (existing logic)
-                api.logging().logToOutput("SseTransport: Received event type: " + type + ", data: " + data);
+                try {
+                    api.logging().logToOutput("SseTransport: Received event type: " + type + ", data: " + data);
+                } catch (Exception ignored) {}
+
                 if ("endpoint".equals(type)) {
                     String baseUrl = (config.isUseTls() || config.isUseMtls() ? "https://" : "http://") + config.getHost() + ":" + config.getPort();
-                    if (data.startsWith("http://") || data.startsWith("https://")) {
-                        postEndpointUrl = data;
-                    } else if (data.startsWith("/")) {
-                        postEndpointUrl = baseUrl + data;
+                    String candidateUrl;
+                    
+                    if (data.startsWith("/")) {
+                        candidateUrl = baseUrl + data;
+                    } else if (data.startsWith("http://") || data.startsWith("https://")) {
+                        candidateUrl = data;
                     } else {
-                        postEndpointUrl = baseUrl + (data.startsWith("/") ? "" : "/") + data;
+                        candidateUrl = baseUrl + (data.startsWith("/") ? "" : "/") + data;
                     }
-                    api.logging().logToOutput("SseTransport: Resolved POST URL: " + postEndpointUrl);
+
+                    // Security Check: SSRF Prevention
+                    try {
+                        URL original = new URL(baseUrl);
+                        URL candidate = new URL(candidateUrl);
+                        
+                        if (!original.getHost().equalsIgnoreCase(candidate.getHost()) || 
+                            original.getPort() != candidate.getPort()) {
+                            try {
+                                api.logging().logToError("SECURITY WARNING: Server attempted to redirect POST endpoint to external/different host: " + candidateUrl + ". Ignoring.");
+                            } catch (Exception ignored) {}
+                            // Fallback to default
+                            postEndpointUrl = baseUrl + config.getPath(); 
+                        } else {
+                            postEndpointUrl = candidateUrl;
+                            try {
+                                api.logging().logToOutput("SseTransport: Resolved POST URL: " + postEndpointUrl);
+                            } catch (Exception ignored) {}
+                        }
+                    } catch (Exception e) {
+                        try {
+                            api.logging().logToError("Failed to validate endpoint URL: " + e.getMessage());
+                        } catch (Exception ignored) {}
+                        postEndpointUrl = baseUrl + config.getPath();
+                    }
+                    
+                    endpointLatch.countDown(); // Signal readiness
                 } else {
                     listener.onMessage(data);
                 }
@@ -147,7 +183,9 @@ public class SseTransport implements McpTransport {
 
             @Override
             public void onClosed(@NotNull EventSource eventSource) {
-                api.logging().logToOutput("SseTransport: Connection closed by server.");
+                try {
+                    api.logging().logToOutput("SseTransport: Connection closed by server.");
+                } catch (Exception ignored) {}
                 listener.onClose();
             }
 
@@ -160,10 +198,14 @@ public class SseTransport implements McpTransport {
                     } catch (Exception e) {
                         body = " (failed to read body)";
                     }
-                    api.logging().logToError("SseTransport: Failure. Code: " + response.code() + ", Body: " + body);
+                    try {
+                        api.logging().logToError("SseTransport: Failure. Code: " + response.code() + ", Body: " + body);
+                    } catch (Exception ignored) {}
                     listener.onError(new RuntimeException("HTTP " + response.code() + ": " + response.message() + "\nBody: " + body));
                 } else {
-                    api.logging().logToError("SseTransport: Failure. Exception: " + t.getMessage());
+                    try {
+                        api.logging().logToError("SseTransport: Failure. Exception: " + t.getMessage());
+                    } catch (Exception ignored) {}
                     listener.onError(t);
                 }
             }
@@ -171,19 +213,6 @@ public class SseTransport implements McpTransport {
 
         EventSource.Factory factory = EventSources.createFactory(client);
         this.eventSource = factory.newEventSource(sseRequest, esListener);
-        
-        // Optimistic "Kickstart" - if onOpen doesn't fire in 2s, assume connected enough to try POST
-        new Thread(() -> {
-            try {
-                Thread.sleep(2000);
-                if (onOpenCalled.compareAndSet(false, true)) {
-                    api.logging().logToOutput("SseTransport: Kickstart - Optimistically triggering onOpen...");
-                    listener.onOpen();
-                }
-            } catch (InterruptedException e) {
-                // Ignore
-            }
-        }).start();
     }
 
     private void configureMtls(OkHttpClient.Builder builder, ConnectionConfiguration config) {
@@ -217,18 +246,15 @@ public class SseTransport implements McpTransport {
                 if (postEndpointUrl != null) {
                     url = postEndpointUrl;
                 } else {
-                    // Wait briefly for endpoint event (race condition fix)
-                    // Some servers (CoinAPI) send 'endpoint' immediately after onOpen.
-                    // Others (DeepWiki) don't send it at all.
-                    for (int i = 0; i < 20; i++) { // Wait up to 2 seconds
-                        if (postEndpointUrl != null) break;
-                        try { Thread.sleep(100); } catch (Exception ignored) {}
-                    }
+                    // Wait for endpoint event using Latch (max 2 seconds)
+                    try {
+                        endpointLatch.await(2000, TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException ignored) {}
 
                     if (postEndpointUrl != null) {
                         url = postEndpointUrl;
                     } else {
-                        api.logging().logToError("SseTransport: Warning - Sending message before 'endpoint' event received. Using default path.");
+                        api.logging().logToError("SseTransport: Warning - Sending message before 'endpoint' event received (or timed out). Using default path.");
                         url = "http://" + config.getHost() + ":" + config.getPort() + config.getPath();
                         if (config.isUseTls() || config.isUseMtls()) {
                             url = url.replace("http://", "https://");
@@ -249,7 +275,12 @@ public class SseTransport implements McpTransport {
                 Request request = requestBuilder.build();
                 api.logging().logToOutput("SseTransport: Request Headers: " + request.headers());
 
-                try (okhttp3.Response response = client.newCall(request).execute()) {
+                // Use a client with a read timeout for POSTs to avoid hanging on stuck streams
+                OkHttpClient postClient = client.newBuilder()
+                        .readTimeout(30, TimeUnit.SECONDS)
+                        .build();
+
+                try (okhttp3.Response response = postClient.newCall(request).execute()) {
                     if (!response.isSuccessful()) {
                         String body = "";
                         try { body = response.body().string(); } catch (Exception ignored) {}
@@ -259,18 +290,24 @@ public class SseTransport implements McpTransport {
                         MediaType contentType = response.body().contentType();
                         if (contentType != null) {
                             if (contentType.type().equals("text") && contentType.subtype().equals("event-stream")) {
-                                api.logging().logToOutput("SseTransport: Received SSE stream in POST response.");
+                                try {
+                                    api.logging().logToOutput("SseTransport: Received SSE stream in POST response.");
+                                } catch (Exception ignored) {}
                                 handleSseResponse(response.body().charStream());
                             } else if (contentType.subtype().equals("json")) {
                                 String json = response.body().string();
-                                api.logging().logToOutput("SseTransport: Received JSON in POST response: " + json);
+                                try {
+                                    api.logging().logToOutput("SseTransport: Received JSON in POST response: " + json);
+                                } catch (Exception ignored) {}
                                 listener.onMessage(json);
                             }
                         }
                     }
                 }
             } catch (Exception e) {
-                api.logging().logToError("SseTransport: Send failed: " + e.getMessage());
+                try {
+                    api.logging().logToError("SseTransport: Send failed: " + e.getMessage());
+                } catch (Exception ignored) {}
             }
         }).start();
     }
@@ -285,7 +322,9 @@ public class SseTransport implements McpTransport {
                 } else if (line.isEmpty()) {
                     if (dataBuffer.length() > 0) {
                         String data = dataBuffer.toString();
-                        api.logging().logToOutput("SseTransport: Parsed event from POST response: " + data);
+                        try {
+                            api.logging().logToOutput("SseTransport: Parsed event from POST response: " + data);
+                        } catch (Exception ignored) {}
                         listener.onMessage(data);
                         dataBuffer.setLength(0);
                     }
@@ -294,11 +333,15 @@ public class SseTransport implements McpTransport {
             // If EOF with data pending
             if (dataBuffer.length() > 0) {
                  String data = dataBuffer.toString();
-                 api.logging().logToOutput("SseTransport: Parsed event from POST response (EOF): " + data);
+                 try {
+                     api.logging().logToOutput("SseTransport: Parsed event from POST response (EOF): " + data);
+                 } catch (Exception ignored) {}
                  listener.onMessage(data);
             }
         } catch (Exception e) {
-            api.logging().logToError("SseTransport: Failed to parse SSE from POST response: " + e.getMessage());
+            try {
+                api.logging().logToError("SseTransport: Failed to parse SSE from POST response: " + e.getMessage());
+            } catch (Exception ignored) {}
         }
     }
 

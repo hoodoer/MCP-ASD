@@ -4,9 +4,8 @@ import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.ByteArray;
 import burp.api.montoya.http.HttpService;
 import burp.api.montoya.http.message.requests.HttpRequest;
-import com.mcp_asd.burp.test.SecurityTester;
-import com.mcp_asd.burp.McpProxy; // Add import
-import com.mcp_asd.burp.GlobalSettings; // Add import
+import com.mcp_asd.burp.McpProxy; 
+import com.mcp_asd.burp.GlobalSettings; 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -20,7 +19,6 @@ import java.awt.event.MouseEvent;
 
 public class DashboardTab extends JComponent {
     private final MontoyaApi api;
-    private final SecurityTester tester;
     private final McpProxy mcpProxy;
     private ConnectionListener connectionListener;
 
@@ -65,9 +63,8 @@ public class DashboardTab extends JComponent {
         this.cancellationListener = listener;
     }
 
-    public DashboardTab(MontoyaApi api, SecurityTester tester, McpProxy mcpProxy, GlobalSettings settings) { // Update Constructor
+    public DashboardTab(MontoyaApi api, McpProxy mcpProxy, GlobalSettings settings) { // Update Constructor
         this.api = api;
-        this.tester = tester;
         this.mcpProxy = mcpProxy;
         this.settings = settings;
         initComponents();
@@ -98,7 +95,7 @@ public class DashboardTab extends JComponent {
         
         JButton aboutButton = new JButton("About");
         aboutButton.addActionListener(e -> JOptionPane.showMessageDialog(this, 
-                "MCP Attack Surface Detector\n\nA Burp Suite extension for discovering and testing\nModel Context Protocol (MCP) servers.\n\nVersion: 0.6.0 (Alpha)\nAuthor: Hoodoer", 
+                "MCP Attack Surface Detector\n\nA Burp Suite extension for discovering and testing\nModel Context Protocol (MCP) servers.\n\nVersion: 1.0\nAuthor: Hoodoer\nEmail: hoodoer@bitwisemunitions.dev", 
                 "About MCP-ASD", 
                 JOptionPane.INFORMATION_MESSAGE));
 
@@ -126,7 +123,9 @@ public class DashboardTab extends JComponent {
         JButton connectButton = new JButton("New Connection");
         connectButton.addActionListener(e -> {
             SwingUtilities.invokeLater(() -> {
-                ConnectionDialog dialog = new ConnectionDialog(null, "localhost", 8000, lastConfig);
+                Window parentWindow = SwingUtilities.getWindowAncestor(this);
+                Frame parentFrame = (parentWindow instanceof Frame) ? (Frame) parentWindow : null;
+                ConnectionDialog dialog = new ConnectionDialog(parentFrame, "", 8000, lastConfig);
                 dialog.setVisible(true);
                 if (dialog.isConfirmed()) {
                     clearData(); // Clear UI immediately
@@ -287,7 +286,11 @@ public class DashboardTab extends JComponent {
         JSONObject caps = serverInfo.optJSONObject("capabilities");
         if (caps != null) {
             for (String key : caps.keySet()) {
-                capsHtml.append("<li>").append(key).append("</li>");
+                // Fix: Escape capability keys to prevent HTML injection
+                String safeKey = key.replace("&", "&amp;")
+                                    .replace("<", "&lt;")
+                                    .replace(">", "&gt;");
+                capsHtml.append("<li>").append(safeKey).append("</li>");
             }
         }
         capsHtml.append("</ul>");
@@ -393,11 +396,15 @@ public class DashboardTab extends JComponent {
         }
 
         HttpService httpService = HttpService.httpService("127.0.0.1", port, false);
+        
+        // Fix: Use UTF-8 bytes for Content-Length
+        byte[] bodyBytes = requestBody.getBytes(StandardCharsets.UTF_8);
+        
         String rawRequestString = 
             "POST /invoke HTTP/1.1\r\n" +
             "Host: mcp-asd.local\r\n" +
             "Content-Type: application/json\r\n" +
-            "Content-Length: " + requestBody.length() + "\r\n" +
+            "Content-Length: " + bodyBytes.length + "\r\n" +
             "\r\n" +
             requestBody;
 
@@ -453,18 +460,29 @@ public class DashboardTab extends JComponent {
 
     private void addContextMenu(JList<AttackSurfaceNode> list, String type) {
         JPopupMenu popupMenu = new JPopupMenu();
-        JMenuItem scanItem = new JMenuItem("Active Scan (Phase 2)");
-        scanItem.addActionListener(e -> {
+        
+        JMenuItem repeaterItem = new JMenuItem("Send to Repeater");
+        repeaterItem.addActionListener(e -> {
             AttackSurfaceNode selected = list.getSelectedValue();
             if (selected != null) {
-                if ("Tools".equals(type)) {
-                    tester.scanTool(selected);
-                } else if ("Resources".equals(type)) {
-                    tester.scanResource(selected);
-                }
+                // Set selection so details pane updates (and generates prototype)
+                list.setSelectedValue(selected, true);
+                // Trigger the send
+                sendTo(false); 
             }
         });
-        popupMenu.add(scanItem);
+        
+        JMenuItem intruderItem = new JMenuItem("Send to Intruder");
+        intruderItem.addActionListener(e -> {
+            AttackSurfaceNode selected = list.getSelectedValue();
+            if (selected != null) {
+                list.setSelectedValue(selected, true);
+                sendTo(true);
+            }
+        });
+
+        popupMenu.add(repeaterItem);
+        popupMenu.add(intruderItem);
 
         list.addMouseListener(new MouseAdapter() {
             @Override

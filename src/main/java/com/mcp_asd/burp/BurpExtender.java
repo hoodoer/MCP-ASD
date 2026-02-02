@@ -4,7 +4,6 @@ import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
 import com.mcp_asd.burp.engine.EnumerationEngine;
 import com.mcp_asd.burp.engine.SessionStore;
-import com.mcp_asd.burp.test.SecurityTester;
 import com.mcp_asd.burp.ui.DashboardTab;
 
 public class BurpExtender implements BurpExtension
@@ -22,20 +21,15 @@ public class BurpExtender implements BurpExtension
             api.logging().logToOutput("Initializing SessionStore...");
             SessionStore sessionStore = new SessionStore();
             
-            api.logging().logToOutput("Initializing SecurityTester...");
-            SecurityTester tester = new SecurityTester(api);
-            tester.setSessionStore(sessionStore);
-            
             // Refactored initialization order to handle circular dependencies
             api.logging().logToOutput("Initializing EnumerationEngine...");
-            EnumerationEngine engine = new EnumerationEngine(api, null, tester, sessionStore, settings);
-            tester.setEngine(engine);
+            EnumerationEngine engine = new EnumerationEngine(api, null, sessionStore, settings);
 
             api.logging().logToOutput("Initializing McpProxy...");
             McpProxy proxy = new McpProxy(api, sessionStore, engine);
             
             api.logging().logToOutput("Initializing DashboardTab...");
-            DashboardTab dashboardTab = new DashboardTab(api, tester, proxy, settings);
+            DashboardTab dashboardTab = new DashboardTab(api, proxy, settings);
             
             // Link Tab to Engine
             engine.setDashboardTab(dashboardTab);
@@ -62,6 +56,14 @@ public class BurpExtender implements BurpExtension
             
             api.logging().logToOutput("Registering SuiteTab...");
             api.userInterface().registerSuiteTab("MCP-ASD", dashboardTab);
+            
+            // Register Unload Handler
+            api.extension().registerUnloadingHandler(() -> {
+                api.logging().logToOutput("Unloading MCP-ASD...");
+                engine.cancel(); // Close active transports
+                scanHandler.shutdown(); // Stop active probes
+                api.logging().logToOutput("Cleanup complete.");
+            });
             
             api.logging().logToOutput("Initialization complete.");
         } catch (Throwable e) {
