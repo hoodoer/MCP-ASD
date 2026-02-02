@@ -47,6 +47,10 @@ The resulting JAR will be located at `build/libs/mcp-asd.jar`.
 - Connection settings (host, port, headers, certificates) are persisted for the duration of the session.
 - **Cancel Button:** If a connection attempt hangs or takes too long, use the **Cancel** button to abort the handshake and reset the interface.
 
+<img width="1359" height="1078" alt="image" src="https://github.com/user-attachments/assets/db879ed2-8876-404f-be80-5dddb1ba2b04" />
+<img width="671" height="984" alt="image" src="https://github.com/user-attachments/assets/b5013795-29b4-4450-a3a6-f5a8f5d30494" />
+
+
 ### 2. Global Settings & Detection
 Click the **Settings** button in the top header to configure advanced options:
 
