@@ -23,6 +23,9 @@ It provides a bridge between Burp's synchronous testing tools (Repeater, Intrude
 - Burp Suite Professional or Community (2023.12.1+)
 
 ### Building from Source
+_Note: There is a precompiled .jar at:_  
+https://github.com/hoodoer/MCP-ASD/releases/tag/v1.0
+
 ```bash
 git clone https://github.com/your-repo/mcp-asd.git
 cd mcp-asd
@@ -110,18 +113,18 @@ A mock MCP server is included for testing the extension's features.
 
 ### Requirements
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ### Execution
 ```bash
 python3 mcp_server.py
 ```
-The server supports authentication (Bearer token: `bearer-token-123`) and includes vulnerable endpoints (`echo_input`, `crash_me`) for verifying scanner functionality.
+The server supports authentication (Bearer token: `bearer-token-123`).
 
 ## Contact
 Drew Kirkpatrick  
 @hoodoer  
-hoodoer @bitwisemunitions.dev  
+hoodoer@bitwisemunitions.dev  
 
 You can find me over at TrustedSec.
