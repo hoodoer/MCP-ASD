@@ -48,9 +48,11 @@ The resulting JAR will be located at `build/libs/mcp-asd.jar`.
 - **Cancel Button:** If a connection attempt hangs or takes too long, use the **Cancel** button to abort the handshake and reset the interface.
 
 <img width="1359" height="1078" alt="image" src="https://github.com/user-attachments/assets/db879ed2-8876-404f-be80-5dddb1ba2b04" />  
+
 *Figure 1: Starting a new connection*  
 
 <img width="629" height="998" alt="image" src="https://github.com/user-attachments/assets/02729173-f8dd-4f5f-9773-8701af21cbf7" />  
+
 *Figure 2: Automatic discovery of endpoints*  
 
 
