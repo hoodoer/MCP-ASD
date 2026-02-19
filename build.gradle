@@ -20,6 +20,10 @@ java {
     }
 }
 
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
 dependencies {
     implementation 'net.portswigger.burp.extensions:montoya-api:2023.12.1'
     implementation 'org.apache.commons:commons-math3:3.6.1'

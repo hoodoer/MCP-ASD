@@ -166,11 +166,11 @@ public class ConnectionDialog extends JDialog {
         gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 1; gbc.weightx = 0.0;
         formPanel.add(new JLabel("Transport:"), gbc);
         gbc.gridx = 1; gbc.gridy = 4; gbc.weightx = 1.0;
-        transportCombo = new JComboBox<>(new String[]{"SSE", "WebSocket"});
+        transportCombo = new JComboBox<>(new String[]{"SSE", "WebSocket", "HTTP (POST only)"});
         transportCombo.addActionListener(e -> {
             if ("WebSocket".equals(transportCombo.getSelectedItem())) {
                 if (pathField.getText().equals("/mcp")) pathField.setText("/ws");
-            } else {
+            } else if (!"HTTP (POST only)".equals(transportCombo.getSelectedItem())) {
                 if (pathField.getText().equals("/ws")) pathField.setText("/mcp");
             }
         });
