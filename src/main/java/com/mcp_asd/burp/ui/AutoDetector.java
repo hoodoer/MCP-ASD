@@ -5,6 +5,7 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
 
+import java.net.URLDecoder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -13,6 +14,29 @@ import java.util.concurrent.TimeUnit;
 
 public class AutoDetector {
     private static final List<String> COMMON_PATHS = Arrays.asList("/mcp", "/sse", "/ws", "/", "/api/mcp", "/v1/mcp");
+
+    private static final String[] AUTH_REDIRECT_PATTERNS = {
+        "doauth", "oauth", "/auth", "login", "signin", "sign-in",
+        "saml", "/sso", "/cas/", "adfs", "openid", "authorize"
+    };
+
+    private static boolean isAuthRedirect(int statusCode, String locationHeader) {
+        if (statusCode < 300 || statusCode > 308 || locationHeader == null || locationHeader.isEmpty()) {
+            return false;
+        }
+        String decoded;
+        try {
+            decoded = URLDecoder.decode(locationHeader, "UTF-8").toLowerCase();
+        } catch (Exception e) {
+            decoded = locationHeader.toLowerCase();
+        }
+        for (String pattern : AUTH_REDIRECT_PATTERNS) {
+            if (decoded.contains(pattern)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     public static class DetectionResult {
         public String transport; // "SSE" or "WebSocket"
@@ -36,6 +60,7 @@ public class AutoDetector {
                     .protocols(Arrays.asList(Protocol.HTTP_1_1))
                     .readTimeout(5, TimeUnit.SECONDS)
                     .connectTimeout(5, TimeUnit.SECONDS)
+                    .followRedirects(false)
                     .build();
             
             String protocol = useTls ? "https://" : "http://";
@@ -60,6 +85,12 @@ public class AutoDetector {
                             // If we get an auth error, the endpoint exists!
                             results.add(new DetectionResult("SSE (Auth Required)", path));
                             continue;
+                        } else if (response.code() >= 300 && response.code() <= 308) {
+                            String location = response.header("Location", "");
+                            if (isAuthRedirect(response.code(), location)) {
+                                results.add(new DetectionResult("SSE (Auth Gateway)", path));
+                                continue;
+                            }
                         } else {
                             System.out.println("AutoDetector SSE Fail [" + path + "]: Code " + response.code());
                         }
@@ -90,6 +121,11 @@ public class AutoDetector {
                         } else if (response.code() == 401 || response.code() == 403) {
                              if (path.contains("ws")) {
                                  results.add(new DetectionResult("WebSocket (Auth Required)", path));
+                             }
+                        } else if (response.code() >= 300 && response.code() <= 308 && path.contains("ws")) {
+                             String location = response.header("Location", "");
+                             if (isAuthRedirect(response.code(), location)) {
+                                 results.add(new DetectionResult("WebSocket (Auth Gateway)", path));
                              }
                         } else if (response.code() != 404 && path.contains("ws")) {
                              // If it exists (not 404) and looks like a ws path, we guess yes.

@@ -1,5 +1,5 @@
 # MCP Attack Surface Detector (MCP-ASD)
-**Version: 1.0**
+**Version: 1.0.1**
 
 MCP-ASD is a Burp Suite extension (Montoya API) designed to identify, map, and test the attack surface of Model Context Protocol (MCP) servers. 
 
@@ -15,6 +15,7 @@ It provides a bridge between Burp's synchronous testing tools (Repeater, Intrude
 - **Authentication & mTLS:** Support for custom HTTP headers (OAuth Bearer tokens, API keys) and mTLS client certificates (PKCS#12).
 - **Native Integration:** Reports discovered MCP servers directly to Burp's **Target** and **Dashboard**.
 - **Advanced Detection:** Includes passive monitoring and active probing for MCP servers on discovered domains.
+- **Auth Gateway Detection:** Detects MCP endpoints behind authentication gateways (Zscaler, OAuth, SAML, SSO) by recognizing redirect patterns to auth endpoints, including URL-encoded origurl parameters.
 
 ## Installation
 
@@ -73,8 +74,8 @@ Click the **Settings** button in the top header to configure advanced options:
     *   **Proxy Handshake/Enumeration Traffic:** Route the extension's internal SSE/WebSocket traffic through Burp's local proxy listener (default: `127.0.0.1:8080`). This allows you to see the "invisible" handshake and enumeration requests in Burp's **Logger** and **Proxy History**.
 
 *   **MCP Server Detection:**
-    *   **Passive Checks:** Monitors all passing traffic for MCP indicators (e.g., `MCP-Protocol-Version` header, JSON-RPC bodies). Raises an **Informational Issue** in Burp if detected.
-    *   **Active Detection:** Automatically probes new domains for common MCP endpoints (`/mcp`, `/sse`, `/ws`, etc.) when they are first encountered.
+    *   **Passive Checks:** Monitors all passing traffic for MCP indicators (e.g., `MCP-Protocol-Version` header, JSON-RPC bodies, auth gateway redirects). Raises an **Informational Issue** in Burp if detected.
+    *   **Active Detection:** Automatically probes new domains for common MCP endpoints (`/mcp`, `/sse`, `/ws`, etc.) when they are first encountered. Detects endpoints behind auth gateways (302/303 redirects to OAuth, SAML, SSO, Zscaler, etc.).
     *   **Limit to In-Scope:** Restricts active detection probes to domains that are in your Burp Target Scope (Recommended).
 
 <img width="1108" height="803" alt="image" src="https://github.com/user-attachments/assets/f598284b-a0d2-426f-8f95-8cd7793ecaed" />  

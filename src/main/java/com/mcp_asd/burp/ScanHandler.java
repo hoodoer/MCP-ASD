@@ -21,6 +21,7 @@ import javax.net.ssl.*;
 import java.security.cert.CertificateException;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
+import java.net.URLDecoder;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
@@ -36,6 +37,17 @@ public class ScanHandler implements HttpHandler {
     private final ConcurrentHashMap<String, Boolean> visitedDomains = new ConcurrentHashMap<>();
     private final ExecutorService probeExecutor = Executors.newFixedThreadPool(2);
     private OkHttpClient client;
+
+    // Auth-related patterns in redirect Location URLs
+    private static final String[] AUTH_REDIRECT_PATTERNS = {
+        "doauth", "oauth", "/auth", "login", "signin", "sign-in",
+        "saml", "/sso", "/cas/", "adfs", "openid", "authorize"
+    };
+
+    // MCP-related path patterns for origurl detection
+    private static final String[] MCP_PATH_PATTERNS = {
+        "/mcp", "/sse", "/ws"
+    };
 
     public ScanHandler(MontoyaApi api, GlobalSettings settings) {
         this.api = api;
@@ -77,7 +89,7 @@ public class ScanHandler implements HttpHandler {
                     .hostnameVerifier((hostname, session) -> true)
                     .connectTimeout(5, TimeUnit.SECONDS)
                     .readTimeout(5, TimeUnit.SECONDS)
-                    .followRedirects(true);
+                    .followRedirects(false);
 
             if (settings.isProxyTrafficEnabled()) {
                 String host = settings.getProxyHost();
@@ -94,6 +106,47 @@ public class ScanHandler implements HttpHandler {
             api.logging().logToError("ScanHandler: Failed to create insecure SSL client: " + e.getMessage());
             this.client = new OkHttpClient(); // Fallback
         }
+    }
+
+    /**
+     * Check if a redirect response points to an authentication endpoint.
+     */
+    private boolean isAuthRedirect(int statusCode, String locationHeader) {
+        if (statusCode < 300 || statusCode > 308 || locationHeader == null || locationHeader.isEmpty()) {
+            return false;
+        }
+        String decoded;
+        try {
+            decoded = URLDecoder.decode(locationHeader, "UTF-8").toLowerCase();
+        } catch (Exception e) {
+            decoded = locationHeader.toLowerCase();
+        }
+        for (String pattern : AUTH_REDIRECT_PATTERNS) {
+            if (decoded.contains(pattern)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if a Location header (possibly URL-encoded) contains MCP-related paths.
+     * Handles origurl parameters like: ?origurl=https%3A%2F%2Fhost%2Fapi%2Fmcp
+     */
+    private boolean locationContainsMcpPath(String locationHeader) {
+        if (locationHeader == null || locationHeader.isEmpty()) return false;
+        String decoded;
+        try {
+            decoded = URLDecoder.decode(locationHeader, "UTF-8").toLowerCase();
+        } catch (Exception e) {
+            decoded = locationHeader.toLowerCase();
+        }
+        for (String pattern : MCP_PATH_PATTERNS) {
+            if (decoded.contains(pattern)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -175,6 +228,36 @@ public class ScanHandler implements HttpHandler {
             HttpRequestResponse requestResponse = HttpRequestResponse.httpRequestResponse(response.initiatingRequest(), response);
             createIssue(requestResponse, "MCP Server Detected (Passive)", evidence);
         }
+
+        // Auth gateway redirect detection: 3xx redirect from MCP paths or with MCP paths in origurl
+        if (!found) {
+            int statusCode = response.statusCode();
+            if (statusCode >= 300 && statusCode <= 308 && response.hasHeader("Location")) {
+                String location = response.header("Location").value();
+                String requestPath = response.initiatingRequest().path().toLowerCase();
+
+                // Check if the original request targeted an MCP-related path
+                boolean mcpPath = false;
+                for (String pattern : MCP_PATH_PATTERNS) {
+                    if (requestPath.contains(pattern)) {
+                        mcpPath = true;
+                        break;
+                    }
+                }
+
+                String authEvidence = null;
+                if (mcpPath && isAuthRedirect(statusCode, location)) {
+                    authEvidence = "Auth redirect (" + statusCode + ") from MCP path '" + requestPath + "'. Location: " + location;
+                } else if (locationContainsMcpPath(location) && isAuthRedirect(statusCode, location)) {
+                    authEvidence = "Auth redirect (" + statusCode + ") with MCP path in redirect target. Location: " + location;
+                }
+
+                if (authEvidence != null) {
+                    HttpRequestResponse requestResponse = HttpRequestResponse.httpRequestResponse(response.initiatingRequest(), response);
+                    createIssue(requestResponse, "MCP Endpoint Behind Auth Gateway (Passive)", authEvidence, AuditIssueConfidence.FIRM);
+                }
+            }
+        }
     }
 
     private void performActiveProbe(String host, int port, boolean secure) {
@@ -253,7 +336,35 @@ public class ScanHandler implements HttpHandler {
                                 HttpRequestResponse requestResponse = HttpRequestResponse.httpRequestResponse(burpRequest, burpResponse);
                                 
                                 createIssue(requestResponse, "MCP Server Discovered (Active Probe)", evidence);
-                                break; 
+                                break;
+                        }
+                    }
+
+                    // Auth gateway redirect detection: 3xx with auth-related Location header
+                    if (code >= 300 && code <= 308) {
+                        String location = okResponse.header("Location", "");
+                        if (isAuthRedirect(code, location)) {
+                            String authEvidence = "Endpoint " + endpoint + " returned auth redirect (" + code + ").";
+                            authEvidence += " Location: " + location;
+                            if (locationContainsMcpPath(location)) {
+                                authEvidence += " Redirect target contains MCP path indicators.";
+                            }
+
+                            api.logging().logToOutput("FOUND MCP (Auth Gateway): " + authEvidence);
+
+                            burp.api.montoya.http.HttpService service = burp.api.montoya.http.HttpService.httpService(host, port, secure);
+                            HttpRequest burpRequest = HttpRequest.httpRequest(service, ByteArray.byteArray(("GET " + endpoint + " HTTP/1.1\r\nHost: " + host + "\r\n\r\n").getBytes()));
+
+                            StringBuilder rawResponseHead = new StringBuilder();
+                            rawResponseHead.append("HTTP/1.1 ").append(code).append(" Redirect\r\n");
+                            okResponse.headers().forEach(pair -> rawResponseHead.append(pair.getFirst()).append(": ").append(pair.getSecond()).append("\r\n"));
+                            rawResponseHead.append("\r\n");
+
+                            HttpResponse burpResponse = HttpResponse.httpResponse(ByteArray.byteArray(rawResponseHead.toString().getBytes()));
+                            HttpRequestResponse requestResponse = HttpRequestResponse.httpRequestResponse(burpRequest, burpResponse);
+
+                            createIssue(requestResponse, "MCP Endpoint Behind Auth Gateway (Active Probe)", authEvidence, AuditIssueConfidence.FIRM);
+                            break;
                         }
                     }
                 }
@@ -265,13 +376,17 @@ public class ScanHandler implements HttpHandler {
     }
 
     private void createIssue(HttpRequestResponse requestResponse, String name, String detail) {
+        createIssue(requestResponse, name, detail, AuditIssueConfidence.CERTAIN);
+    }
+
+    private void createIssue(HttpRequestResponse requestResponse, String name, String detail, AuditIssueConfidence confidence) {
         AuditIssue issue = AuditIssue.auditIssue(
                 name,
                 detail,
                 "The application appears to be running a Model Context Protocol (MCP) server.",
                 requestResponse.request().url(),
                 AuditIssueSeverity.INFORMATION,
-                AuditIssueConfidence.CERTAIN,
+                confidence,
                 "Investigate the MCP endpoints using the MCP-ASD extension.",
                 null,
                 AuditIssueSeverity.INFORMATION,

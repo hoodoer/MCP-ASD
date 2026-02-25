@@ -1,17 +1,2 @@
-# Ignore Gradle project-specific cache directory
-.gradle
-
-# Ignore Gradle build output directory
-build
-
-# Ignore Python virtual environment
-bin/
-lib/
-lib64/
-include/
-pyvenv.cfg
-
-# Ignore IDE settings
-.idea/
-*.iml
-.vscode/
+# Created by venv; see https://docs.python.org/3/library/venv.html
+*

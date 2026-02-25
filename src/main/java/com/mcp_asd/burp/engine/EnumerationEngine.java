@@ -156,7 +156,7 @@ public class EnumerationEngine implements TransportListener {
         JSONObject initParams = new JSONObject();
         initParams.put("protocolVersion", "2024-11-05");
         initParams.put("capabilities", new JSONObject());
-        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "1.0"));
+        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "1.0.1"));
         
         if (currentConfig != null && currentConfig.getInitializationOptions() != null && !currentConfig.getInitializationOptions().trim().isEmpty()) {
             try {
