@@ -78,7 +78,7 @@ public class EnumerationEngine implements TransportListener {
             boolean success = attemptConnection(config, false);
             if (cancelled) return; // Exit if cancelled
 
-            if (!success && !config.getTransport().equals("WebSocket")) {
+            if (!success && !config.getTransport().equals("WebSocket") && !config.getTransport().equals("HTTP (POST only)")) {
                 api.logging().logToOutput("Enumeration failed or timed out. Retrying with forced HTTP/1.1...");
                 if (dashboardTab != null) {
                     dashboardTab.setStatus("🟠 Retrying (HTTP/1.1)...", java.awt.Color.ORANGE.darker());
@@ -100,6 +100,8 @@ public class EnumerationEngine implements TransportListener {
 
             if ("WebSocket".equals(config.getTransport())) {
                 transport = new WebSocketTransport(api, settings);
+            } else if ("HTTP (POST only)".equals(config.getTransport())) {
+                transport = new PostOnlyTransport(api, settings);
             } else {
                 SseTransport sse = new SseTransport(api, settings);
                 if (forceHttp1) sse.setForceHttp1(true);
