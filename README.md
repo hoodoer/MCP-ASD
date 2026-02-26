@@ -1,5 +1,5 @@
 # MCP Attack Surface Detector (MCP-ASD)
-**Version: 1.0.1**
+**Version: 1.0.2**
 
 MCP-ASD is a Burp Suite extension (Montoya API) designed to identify, map, and test the attack surface of Model Context Protocol (MCP) servers. 
 
@@ -7,7 +7,7 @@ It provides a bridge between Burp's synchronous testing tools (Repeater, Intrude
 
 ## Features
 
-- **Multi-Protocol Support:** Full support for Server-Sent Events (SSE) and WebSockets (ws/wss).
+- **Multi-Protocol Support:** Full support for Server-Sent Events (SSE), WebSockets (ws/wss), and HTTP POST-only transport (for servers that don't support GET/SSE).
 - **Endpoint Auto-Discovery:** Automated detection of MCP endpoints, including detection of protected endpoints that require authentication.
 - **Attack Surface Enumeration:** Automatically discovers and visualizes Tools, Resources, and Prompts, including schema extraction for arguments.
 - **Synchronous Bridging:** Enables seamless use of Burp Repeater and Intruder by handling asynchronous ID correlation and session management.

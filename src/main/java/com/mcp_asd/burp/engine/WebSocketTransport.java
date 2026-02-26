@@ -142,10 +142,17 @@ public class WebSocketTransport implements McpTransport {
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
             kmf.init(keyStore, config.getClientCertPassword().toCharArray());
 
+            // Reuse trust-all manager so self-signed certs still work with mTLS
+            final TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    @Override public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) throws CertificateException {}
+                    @Override public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) throws CertificateException {}
+                    @Override public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[]{}; }
+                }
+            };
             SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(kmf.getKeyManagers(), null, new SecureRandom());
-
-            builder.sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).getTrustManagers()[0]);
+            sslContext.init(kmf.getKeyManagers(), trustAllCerts, new SecureRandom());
+            builder.sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustAllCerts[0]);
         } catch (Exception e) {
             api.logging().logToError("Failed to configure mTLS for WebSocket: " + e.getMessage());
         }
