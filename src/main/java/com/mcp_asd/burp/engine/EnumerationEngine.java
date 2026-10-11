@@ -9,6 +9,9 @@ import org.json.JSONArray;
 
 import javax.swing.SwingUtilities;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 public class EnumerationEngine implements TransportListener {
@@ -21,6 +24,12 @@ public class EnumerationEngine implements TransportListener {
     private volatile boolean connectionFailed = false;
     private ConnectionConfiguration currentConfig;
     private volatile boolean cancelled = false;
+    // Tracked, daemon connection threads so an unload can stop them
+    private final ExecutorService connectionExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "MCP-ASD-Connection");
+        t.setDaemon(true);
+        return t;
+    });
     
     // Request IDs for tracking enumeration responses
     private String initializeRequestId;
@@ -58,6 +67,12 @@ public class EnumerationEngine implements TransportListener {
         }
     }
 
+    /** Called on extension unload: closes the transport and stops any connection attempt. */
+    public void shutdown() {
+        cancel();
+        connectionExecutor.shutdownNow();
+    }
+
     public void start(ConnectionConfiguration config) {
         this.currentConfig = config;
         
@@ -74,22 +89,28 @@ public class EnumerationEngine implements TransportListener {
             dashboardTab.setCancelEnabled(true);
         }
         
-        new Thread(() -> {
-            boolean success = attemptConnection(config, false);
-            if (cancelled) return; // Exit if cancelled
+        try {
+            connectionExecutor.submit(() -> connect(config));
+        } catch (RejectedExecutionException e) {
+            api.logging().logToError("Connection not started: extension is unloading.");
+        }
+    }
 
-            if (!success && !config.getTransport().equals("WebSocket") && !config.getTransport().equals("HTTP (POST only)")) {
-                api.logging().logToOutput("Enumeration failed or timed out. Retrying with forced HTTP/1.1...");
-                if (dashboardTab != null) {
-                    dashboardTab.setStatus("🟠 Retrying (HTTP/1.1)...", java.awt.Color.ORANGE.darker());
-                }
-                attemptConnection(config, true);
-            }
-            
+    private void connect(ConnectionConfiguration config) {
+        boolean success = attemptConnection(config, false);
+        if (cancelled) return; // Exit if cancelled
+
+        if (!success && !config.getTransport().equals("WebSocket") && !config.getTransport().equals("HTTP (POST only)")) {
+            api.logging().logToOutput("Enumeration failed or timed out. Retrying with forced HTTP/1.1...");
             if (dashboardTab != null) {
-                dashboardTab.setCancelEnabled(false);
+                dashboardTab.setStatus("🟠 Retrying (HTTP/1.1)...", java.awt.Color.ORANGE.darker());
             }
-        }).start();
+            attemptConnection(config, true);
+        }
+        
+        if (dashboardTab != null) {
+            dashboardTab.setCancelEnabled(false);
+        }
     }
 
     private boolean attemptConnection(ConnectionConfiguration config, boolean forceHttp1) {
@@ -158,7 +179,7 @@ public class EnumerationEngine implements TransportListener {
         JSONObject initParams = new JSONObject();
         initParams.put("protocolVersion", "2024-11-05");
         initParams.put("capabilities", new JSONObject());
-        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "1.0.1"));
+        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "1.2.0"));
         
         if (currentConfig != null && currentConfig.getInitializationOptions() != null && !currentConfig.getInitializationOptions().trim().isEmpty()) {
             try {

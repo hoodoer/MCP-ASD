@@ -11,16 +11,14 @@ public class GlobalSettings {
     private static final String KEY_PROXY_HOST = "mcp_asd.proxy_host";
     private static final String KEY_PROXY_PORT = "mcp_asd.proxy_port";
     private static final String KEY_PASSIVE_CHECKS = "mcp_asd.passive_checks";
-    private static final String KEY_ACTIVE_DETECTION = "mcp_asd.active_detection";
-    private static final String KEY_SCOPE_ONLY = "mcp_asd.scope_only";
+    private static final String KEY_IGNORE_TLS_ERRORS = "mcp_asd.ignore_tls_errors";
 
     // Defaults
     private static final boolean DEFAULT_PROXY_TRAFFIC = true;
     private static final String DEFAULT_PROXY_HOST = "127.0.0.1";
     private static final int DEFAULT_PROXY_PORT = 8080;
     private static final boolean DEFAULT_PASSIVE_CHECKS = true;
-    private static final boolean DEFAULT_ACTIVE_DETECTION = false;
-    private static final boolean DEFAULT_SCOPE_ONLY = true;
+    private static final boolean DEFAULT_IGNORE_TLS_ERRORS = false;
 
     public GlobalSettings(MontoyaApi api) {
         this.preferences = api.persistence().preferences();
@@ -58,19 +56,12 @@ public class GlobalSettings {
         preferences.setBoolean(KEY_PASSIVE_CHECKS, enabled);
     }
 
-    public boolean isActiveDetectionEnabled() {
-        return preferences.getBoolean(KEY_ACTIVE_DETECTION) == null ? DEFAULT_ACTIVE_DETECTION : preferences.getBoolean(KEY_ACTIVE_DETECTION);
+    /** Direct (non-proxied) SSE/WebSocket connections only; proxied traffic trusts Burp's CA. */
+    public boolean isIgnoreTlsErrorsEnabled() {
+        return preferences.getBoolean(KEY_IGNORE_TLS_ERRORS) == null ? DEFAULT_IGNORE_TLS_ERRORS : preferences.getBoolean(KEY_IGNORE_TLS_ERRORS);
     }
 
-    public void setActiveDetectionEnabled(boolean enabled) {
-        preferences.setBoolean(KEY_ACTIVE_DETECTION, enabled);
-    }
-
-    public boolean isScopeOnlyEnabled() {
-        return preferences.getBoolean(KEY_SCOPE_ONLY) == null ? DEFAULT_SCOPE_ONLY : preferences.getBoolean(KEY_SCOPE_ONLY);
-    }
-
-    public void setScopeOnlyEnabled(boolean enabled) {
-        preferences.setBoolean(KEY_SCOPE_ONLY, enabled);
+    public void setIgnoreTlsErrorsEnabled(boolean enabled) {
+        preferences.setBoolean(KEY_IGNORE_TLS_ERRORS, enabled);
     }
 }

@@ -1,5 +1,7 @@
 package com.mcp_asd.burp.ui;
 
+import burp.api.montoya.MontoyaApi;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -7,6 +9,13 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class ConnectionDialog extends JDialog {
+    private static final String POST_ONLY = "HTTP (POST only)";
+    // Plain text: Burp disables HTML rendering in Swing labels
+    private static final String POST_ONLY_MTLS_NOTE =
+            "HTTP (POST only) is sent through Burp's HTTP stack, so it uses Burp's client certificates: " +
+            "Settings > Network > TLS > Client TLS certificates.";
+
+    private final MontoyaApi api;
     private JTextField hostField;
     private JTextField portField;
     private JCheckBox tlsCheckBox;
@@ -20,17 +29,29 @@ public class ConnectionDialog extends JDialog {
     private JTextField certPathField;
     private JPasswordField certPasswordField;
     private JButton browseCertButton;
+    private JTextArea mtlsNoteLabel;
 
     private boolean confirmed = false;
     private ConnectionConfiguration configuration;
 
-    public ConnectionDialog(Frame owner, String defaultHost, int defaultPort, ConnectionConfiguration existingConfig) {
+    public ConnectionDialog(MontoyaApi api, Frame owner, String defaultHost, int defaultPort, boolean defaultTls, ConnectionConfiguration existingConfig) {
         super(owner, "Connect to MCP Server", true);
+        this.api = api;
         setLayout(new BorderLayout());
-        
-        // Use existing config if available, otherwise empty (no defaults)
-        String initialHost = (existingConfig != null) ? existingConfig.getHost() : "";
-        String initialPort = (existingConfig != null) ? String.valueOf(existingConfig.getPort()) : "";
+
+        // Prefer the last-used config, then the invoking request (context menu), otherwise empty fields
+        String initialHost;
+        String initialPort;
+        if (existingConfig != null) {
+            initialHost = existingConfig.getHost();
+            initialPort = String.valueOf(existingConfig.getPort());
+        } else if (defaultHost != null && !defaultHost.isEmpty()) {
+            initialHost = defaultHost;
+            initialPort = defaultPort > 0 ? String.valueOf(defaultPort) : "";
+        } else {
+            initialHost = "";
+            initialPort = "";
+        }
         
         JTabbedPane tabbedPane = new JTabbedPane();
         
@@ -41,6 +62,11 @@ public class ConnectionDialog extends JDialog {
         // --- Tab 2: Authentication ---
         JPanel authTab = createAuthTab();
         tabbedPane.addTab("Authentication", authTab);
+
+        // Carry TLS over from the invoking request (port-443 auto-tick happens in createGeneralTab)
+        if (existingConfig == null && defaultTls) {
+            tlsCheckBox.setSelected(true);
+        }
 
         // Pre-fill fields if config exists
         if (existingConfig != null) {
@@ -63,6 +89,7 @@ public class ConnectionDialog extends JDialog {
                 certPasswordField.setText(existingConfig.getClientCertPassword());
             }
         }
+        updateMtlsAvailability();
         
         // We need to make sure initParamsArea is accessible.
         if (existingConfig != null && existingConfig.getInitializationOptions() != null) {
@@ -128,14 +155,14 @@ public class ConnectionDialog extends JDialog {
         detectButton.addActionListener(e -> {
             detectButton.setEnabled(false);
             detectButton.setText("Scanning...");
-            AutoDetector.detect(hostField.getText(), getPort(), tlsCheckBox.isSelected()).thenAccept(results -> {
+            AutoDetector.detect(api, hostField.getText().trim(), getPort(), tlsCheckBox.isSelected()).thenAccept(results -> {
                 SwingUtilities.invokeLater(() -> {
                     detectButton.setEnabled(true);
                     detectButton.setText("Auto-Detect Endpoints");
                     if (!results.isEmpty()) {
                         if (results.size() == 1) {
                             AutoDetector.DetectionResult res = results.get(0);
-                            String transport = res.transport.replace(" (Auth Required)", "");
+                            String transport = baseTransport(res.transport);
                             transportCombo.setSelectedItem(transport);
                             pathField.setText(res.path);
                             JOptionPane.showMessageDialog(this, "Found " + res.transport + " endpoint at " + res.path, "Detection Successful", JOptionPane.INFORMATION_MESSAGE);
@@ -150,7 +177,7 @@ public class ConnectionDialog extends JDialog {
                                 results.get(0)
                             );
                             if (selected != null) {
-                                String transport = selected.transport.replace(" (Auth Required)", "");
+                                String transport = baseTransport(selected.transport);
                                 transportCombo.setSelectedItem(transport);
                                 pathField.setText(selected.path);
                             }
@@ -170,9 +197,10 @@ public class ConnectionDialog extends JDialog {
         transportCombo.addActionListener(e -> {
             if ("WebSocket".equals(transportCombo.getSelectedItem())) {
                 if (pathField.getText().equals("/mcp")) pathField.setText("/ws");
-            } else if (!"HTTP (POST only)".equals(transportCombo.getSelectedItem())) {
+            } else if (!POST_ONLY.equals(transportCombo.getSelectedItem())) {
                 if (pathField.getText().equals("/ws")) pathField.setText("/mcp");
             }
+            updateMtlsAvailability();
         });
         formPanel.add(transportCombo, gbc);
 
@@ -273,6 +301,16 @@ public class ConnectionDialog extends JDialog {
         mtlsPanel.add(certPasswordField, gbc);
         
         toggleMtlsFields(false); // Init disabled
+
+        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 3;
+        mtlsNoteLabel = new JTextArea(POST_ONLY_MTLS_NOTE);
+        mtlsNoteLabel.setLineWrap(true);
+        mtlsNoteLabel.setWrapStyleWord(true);
+        mtlsNoteLabel.setEditable(false);
+        mtlsNoteLabel.setOpaque(false);
+        mtlsNoteLabel.setFont(UIManager.getFont("Label.font"));
+        mtlsNoteLabel.setVisible(false);
+        mtlsPanel.add(mtlsNoteLabel, gbc);
         
         panel.add(mtlsPanel, BorderLayout.SOUTH);
 
@@ -309,6 +347,21 @@ public class ConnectionDialog extends JDialog {
     // Add field for init params
     private JTextArea initParamsArea;
     
+    /** Detection labels like "SSE (Auth Gateway)" map to the plain transport name in the combo box. */
+    private static String baseTransport(String detected) {
+        int paren = detected.indexOf(" (");
+        return paren >= 0 ? detected.substring(0, paren) : detected;
+    }
+
+    /** POST-only goes through api.http(), which uses Burp's own client certificate configuration. */
+    private void updateMtlsAvailability() {
+        if (mtlsCheckBox == null || transportCombo == null) return; // Auth tab not built yet
+        boolean postOnly = POST_ONLY.equals(transportCombo.getSelectedItem());
+        mtlsCheckBox.setEnabled(!postOnly);
+        toggleMtlsFields(!postOnly && mtlsCheckBox.isSelected());
+        mtlsNoteLabel.setVisible(postOnly);
+    }
+
     private void toggleMtlsFields(boolean enabled) {
         certPathField.setEnabled(enabled);
         certPasswordField.setEnabled(enabled);
@@ -352,8 +405,8 @@ public class ConnectionDialog extends JDialog {
         }
         configuration.setHeaders(headers);
         
-        // Parse mTLS
-        if (mtlsCheckBox.isSelected()) {
+        // Parse mTLS (not used by POST-only, which relies on Burp's client certificates)
+        if (mtlsCheckBox.isSelected() && !POST_ONLY.equals(transportCombo.getSelectedItem())) {
             configuration.setUseMtls(true);
             configuration.setClientCertPath(certPathField.getText());
             configuration.setClientCertPassword(new String(certPasswordField.getPassword()));

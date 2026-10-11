@@ -1,2 +1,24 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+# Gradle / Java
+.gradle/
+build/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Python venv for the test server (mcp_server.py)
+venv/
+.venv/
+bin/
+lib/
+lib64
+include/
+pyvenv.cfg
+__pycache__/
+
+# Local scratch
+tempFeedback.txt
+tests.txt
+screenshots/

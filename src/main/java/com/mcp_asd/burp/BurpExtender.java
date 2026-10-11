@@ -4,7 +4,12 @@ import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
 import com.mcp_asd.burp.engine.EnumerationEngine;
 import com.mcp_asd.burp.engine.SessionStore;
+import burp.api.montoya.core.BurpSuiteEdition;
+import burp.api.montoya.scanner.scancheck.ScanCheckType;
+import com.mcp_asd.burp.scan.McpActiveScanCheck;
+import com.mcp_asd.burp.scan.McpPassiveScanCheck;
 import com.mcp_asd.burp.ui.DashboardTab;
+import com.mcp_asd.burp.ui.McpSettingsPanel;
 
 public class BurpExtender implements BurpExtension
 {
@@ -47,9 +52,10 @@ public class BurpExtender implements BurpExtension
             api.logging().logToOutput("Registering HttpHandler (McpProxy)...");
             api.http().registerHttpHandler(proxy);
             
-            api.logging().logToOutput("Registering ScanHandler...");
-            ScanHandler scanHandler = new ScanHandler(api, settings);
-            api.http().registerHttpHandler(scanHandler);
+            registerScanChecks(api, settings);
+
+            api.logging().logToOutput("Registering Settings Panel...");
+            api.userInterface().registerSettingsPanel(new McpSettingsPanel(settings));
 
             api.logging().logToOutput("Registering ContextMenu...");
             api.userInterface().registerContextMenuItemsProvider(new com.mcp_asd.burp.ui.ContextMenuFactory(api, engine));
@@ -60,8 +66,8 @@ public class BurpExtender implements BurpExtension
             // Register Unload Handler
             api.extension().registerUnloadingHandler(() -> {
                 api.logging().logToOutput("Unloading MCP-ASD...");
-                engine.cancel(); // Close active transports
-                scanHandler.shutdown(); // Stop active probes
+                engine.shutdown(); // Close active transports and connection threads
+                proxy.shutdown(); // Close internal server socket and client threads
                 api.logging().logToOutput("Cleanup complete.");
             });
             
@@ -75,5 +81,16 @@ public class BurpExtender implements BurpExtension
             e.printStackTrace(pw);
             api.logging().logToError(sw.toString());
         }
+    }
+
+    /** MCP detection runs as Burp Scanner checks, which are only available in Burp Suite Professional. */
+    private static void registerScanChecks(MontoyaApi api, GlobalSettings settings) {
+        if (api.burpSuite().version().edition() != BurpSuiteEdition.PROFESSIONAL) {
+            api.logging().logToOutput("Burp Scanner not available in this edition; MCP passive/active detection checks not registered.");
+            return;
+        }
+        api.logging().logToOutput("Registering scan checks...");
+        api.scanner().registerPassiveScanCheck(new McpPassiveScanCheck(settings), ScanCheckType.PER_REQUEST);
+        api.scanner().registerActiveScanCheck(new McpActiveScanCheck(), ScanCheckType.PER_HOST);
     }
 }

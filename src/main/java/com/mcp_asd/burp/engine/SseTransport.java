@@ -3,6 +3,8 @@ package com.mcp_asd.burp.engine;
 import burp.api.montoya.MontoyaApi;
 import com.mcp_asd.burp.GlobalSettings;
 import com.mcp_asd.burp.ui.ConnectionConfiguration;
+import okhttp3.Call;
+import okhttp3.Callback;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
 import okhttp3.Request;
@@ -12,24 +14,20 @@ import okhttp3.sse.EventSourceListener;
 import okhttp3.sse.EventSources;
 import org.jetbrains.annotations.NotNull;
 
-import java.net.InetSocketAddress;
-import java.net.Proxy;
+import java.io.IOException;
 import java.net.URL; // Add URL import
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch; // Add CountDownLatch import
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.MediaType;
-import javax.net.ssl.*;
-import java.io.FileInputStream;
-import java.security.KeyStore;
-import java.security.SecureRandom;
-import java.security.cert.CertificateException;
 
 public class SseTransport implements McpTransport {
     private final MontoyaApi api;
     private final GlobalSettings settings;
     private OkHttpClient client;
+    private OkHttpClient postClient;
     private EventSource eventSource;
     private ConnectionConfiguration config;
     private TransportListener listener;
@@ -57,52 +55,18 @@ public class SseTransport implements McpTransport {
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.SECONDS); // Infinite timeout for SSE
 
-        // --- SSL Configuration ---
-        try {
-            // Create a trust manager that does not validate certificate chains
-            final TrustManager[] trustAllCerts = new TrustManager[] {
-                new X509TrustManager() {
-                    @Override
-                    public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) throws CertificateException {}
-                    @Override
-                    public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) throws CertificateException {}
-                    @Override
-                    public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[]{}; }
-                }
-            };
-
-            // Install the all-trusting trust manager
-            final SSLContext sslContext = SSLContext.getInstance("SSL");
-            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
-            final SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
-
-            builder.sslSocketFactory(sslSocketFactory, (X509TrustManager)trustAllCerts[0]);
-            builder.hostnameVerifier((hostname, session) -> true);
-
-        } catch (Exception e) {
-            api.logging().logToError("SseTransport: Failed to create insecure SSL context: " + e.getMessage());
-        }
-        // -------------------------
-
         if (forceHttp1) {
             builder.protocols(Arrays.asList(Protocol.HTTP_1_1));
             api.logging().logToOutput("SseTransport: Forcing HTTP/1.1");
         }
 
-        if (config.isUseMtls()) {
-            configureMtls(builder, config);
-        }
-        
-        if (settings != null && settings.isProxyTrafficEnabled()) {
-             String host = settings.getProxyHost();
-             int port = settings.getProxyPort();
-             if (host != null && !host.isEmpty() && port > 0) {
-                 api.logging().logToOutput("SseTransport: Using proxy " + host + ":" + port);
-                 builder.proxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port)));
-             }
-        }
+        TlsSupport.configure(builder, api, settings, config, "SseTransport");
 
         client = builder.build();
+        // Read timeout for POSTs to avoid hanging on stuck streams; shares the dispatcher and pool with client
+        postClient = client.newBuilder()
+                .readTimeout(30, TimeUnit.SECONDS)
+                .build();
 
         String url = "http://" + config.getHost() + ":" + config.getPort() + config.getPath();
         if (config.isUseTls() || config.isUseMtls()) {
@@ -196,12 +160,13 @@ public class SseTransport implements McpTransport {
                     try {
                         body = response.body() != null ? response.body().string() : "";
                     } catch (Exception e) {
-                        body = " (failed to read body)";
+                        body = "";
                     }
                     try {
-                        api.logging().logToError("SseTransport: Failure. Code: " + response.code() + ", Body: " + body);
+                        api.logging().logToError("SseTransport: Failure. Code: " + response.code()
+                                + ", Content-Type: " + response.header("Content-Type") + ", Body: " + body);
                     } catch (Exception ignored) {}
-                    listener.onError(new RuntimeException("HTTP " + response.code() + ": " + response.message() + "\nBody: " + body));
+                    listener.onError(new RuntimeException(describeNonSseResponse(response, body)));
                 } else {
                     try {
                         api.logging().logToError("SseTransport: Failure. Exception: " + t.getMessage());
@@ -215,105 +180,123 @@ public class SseTransport implements McpTransport {
         this.eventSource = factory.newEventSource(sseRequest, esListener);
     }
 
-    private void configureMtls(OkHttpClient.Builder builder, ConnectionConfiguration config) {
-        try {
-            KeyStore keyStore = KeyStore.getInstance("PKCS12");
-            try (FileInputStream fis = new FileInputStream(config.getClientCertPath())) {
-                keyStore.load(fis, config.getClientCertPassword().toCharArray());
-            }
-
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            kmf.init(keyStore, config.getClientCertPassword().toCharArray());
-
-            // Reuse trust-all manager so self-signed certs still work with mTLS
-            final TrustManager[] trustAllCerts = new TrustManager[]{
-                new X509TrustManager() {
-                    @Override public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) throws CertificateException {}
-                    @Override public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) throws CertificateException {}
-                    @Override public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[]{}; }
-                }
-            };
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(kmf.getKeyManagers(), trustAllCerts, new SecureRandom());
-            builder.sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustAllCerts[0]);
-        } catch (Exception e) {
-            api.logging().logToError("Failed to configure mTLS: " + e.getMessage());
-        }
-    }
-
     @Override
     public void send(String message) {
         if (client == null || config == null) return;
-        new Thread(() -> {
-            try {
-                String url;
-                if (postEndpointUrl != null) {
-                    url = postEndpointUrl;
-                } else {
-                    // Wait for endpoint event using Latch (max 2 seconds)
-                    try {
-                        endpointLatch.await(2000, TimeUnit.MILLISECONDS);
-                    } catch (InterruptedException ignored) {}
 
-                    if (postEndpointUrl != null) {
-                        url = postEndpointUrl;
-                    } else {
-                        api.logging().logToError("SseTransport: Warning - Sending message before 'endpoint' event received (or timed out). Using default path.");
-                        url = "http://" + config.getHost() + ":" + config.getPort() + config.getPath();
-                        if (config.isUseTls() || config.isUseMtls()) {
-                            url = url.replace("http://", "https://");
-                        }
-                    }
+        if (postEndpointUrl != null) {
+            enqueuePost(postEndpointUrl, message);
+            return;
+        }
+
+        // The POST URL arrives via the 'endpoint' event. Wait for it on the client's own dispatcher
+        // executor (not a caller thread, which may be the SSE reader) so close() also stops this work.
+        try {
+            client.dispatcher().executorService().execute(() -> {
+                try {
+                    endpointLatch.await(2000, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
 
-                api.logging().logToOutput("SseTransport: Sending POST to " + url + ": " + message);
-                Request.Builder requestBuilder = new Request.Builder()
-                        .url(url)
-                        .post(RequestBody.create(message, MediaType.get("application/json")))
-                        .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                        .addHeader("Accept", "application/json, text/event-stream");
-
-                // Add custom headers
-                config.getHeaders().forEach(requestBuilder::addHeader);
-
-                Request request = requestBuilder.build();
-                api.logging().logToOutput("SseTransport: Request Headers: " + request.headers());
-
-                // Use a client with a read timeout for POSTs to avoid hanging on stuck streams
-                OkHttpClient postClient = client.newBuilder()
-                        .readTimeout(30, TimeUnit.SECONDS)
-                        .build();
-
-                try (okhttp3.Response response = postClient.newCall(request).execute()) {
-                    if (!response.isSuccessful()) {
-                        String body = "";
-                        try { body = response.body().string(); } catch (Exception ignored) {}
-                        api.logging().logToError("SseTransport: Error " + response.code() + ": " + body);
-                    } else {
-                        // Check if the server responded with data in the POST response (Non-standard MCP or specific to some implementations)
-                        MediaType contentType = response.body().contentType();
-                        if (contentType != null) {
-                            if (contentType.type().equals("text") && contentType.subtype().equals("event-stream")) {
-                                try {
-                                    api.logging().logToOutput("SseTransport: Received SSE stream in POST response.");
-                                } catch (Exception ignored) {}
-                                handleSseResponse(response.body().charStream());
-                            } else if (contentType.subtype().equals("json")) {
-                                String json = response.body().string();
-                                try {
-                                    api.logging().logToOutput("SseTransport: Received JSON in POST response: " + json);
-                                } catch (Exception ignored) {}
-                                listener.onMessage(json);
-                            }
-                        }
-                    }
+                String url = postEndpointUrl;
+                if (url == null) {
+                    api.logging().logToError("SseTransport: Warning - Sending message before 'endpoint' event received (or timed out). Using default path.");
+                    url = (config.isUseTls() || config.isUseMtls() ? "https://" : "http://")
+                            + config.getHost() + ":" + config.getPort() + config.getPath();
                 }
-            } catch (Exception e) {
+                enqueuePost(url, message);
+            });
+        } catch (RejectedExecutionException e) {
+            // Transport already closed
+        }
+    }
+
+    private void enqueuePost(String url, String message) {
+        api.logging().logToOutput("SseTransport: Sending POST to " + url + ": " + message);
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
+                .post(RequestBody.create(message, MediaType.get("application/json")))
+                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .addHeader("Accept", "application/json, text/event-stream");
+
+        // Add custom headers
+        config.getHeaders().forEach(requestBuilder::addHeader);
+
+        Request request = requestBuilder.build();
+        api.logging().logToOutput("SseTransport: Request Headers: " + request.headers());
+
+        // Async via the shared dispatcher, so in-flight POSTs are cancelled by close()
+        postClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NotNull Call call, @NotNull IOException e) {
+                if (call.isCanceled()) return;
                 try {
                     api.logging().logToError("SseTransport: Send failed: " + e.getMessage());
                 } catch (Exception ignored) {}
             }
-        }).start();
+
+            @Override
+            public void onResponse(@NotNull Call call, @NotNull okhttp3.Response response) {
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        String body = "";
+                        try { body = response.body().string(); } catch (Exception ignored) {}
+                        api.logging().logToError("SseTransport: Error " + response.code() + ": " + body);
+                        return;
+                    }
+                    // Check if the server responded with data in the POST response (Non-standard MCP or specific to some implementations)
+                    MediaType contentType = response.body().contentType();
+                    if (contentType != null) {
+                        if (contentType.type().equals("text") && contentType.subtype().equals("event-stream")) {
+                            try {
+                                api.logging().logToOutput("SseTransport: Received SSE stream in POST response.");
+                            } catch (Exception ignored) {}
+                            handleSseResponse(response.body().charStream());
+                        } else if (contentType.subtype().equals("json")) {
+                            String json = response.body().string();
+                            try {
+                                api.logging().logToOutput("SseTransport: Received JSON in POST response: " + json);
+                            } catch (Exception ignored) {}
+                            listener.onMessage(json);
+                        }
+                    }
+                } catch (Exception e) {
+                    try {
+                        api.logging().logToError("SseTransport: Send failed: " + e.getMessage());
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
+    }
+
+    /**
+     * Builds a concise, single-line message for when the SSE GET came back as something other than
+     * an event stream. A 2xx with an HTML body usually means a proxy interstitial (e.g. TLS ticked
+     * against a plaintext port) or that the path isn't actually an SSE endpoint. The full body is
+     * written to the error log separately.
+     */
+    private static String describeNonSseResponse(okhttp3.Response response, String body) {
+        String contentType = response.header("Content-Type");
+        if (response.isSuccessful()) {
+            String msg = "Expected an SSE stream but received HTTP " + response.code()
+                    + (contentType != null ? " (" + contentType + ")" : "")
+                    + ". Check the path and TLS setting, and confirm this is an SSE endpoint.";
+            if (contentType != null && contentType.contains("html")) {
+                msg += " An HTML page here often means a proxy error page (e.g. TLS enabled against a non-TLS port).";
+            }
+            return msg;
+        }
+        String snippet = snippet(body);
+        return "HTTP " + response.code() + " " + response.message() + (snippet.isEmpty() ? "" : ": " + snippet);
+    }
+
+    /** Collapse whitespace and cap length, so an error body never floods the status line. */
+    private static String snippet(String body) {
+        if (body == null) return "";
+        String s = body.strip().replaceAll("\\s+", " ");
+        return s.length() > 200 ? s.substring(0, 200) + "…" : s;
     }
 
     private void handleSseResponse(java.io.Reader reader) {
@@ -355,7 +338,9 @@ public class SseTransport implements McpTransport {
             eventSource.cancel();
         }
         if (client != null) {
-            client.dispatcher().executorService().shutdown();
+            client.dispatcher().cancelAll(); // Includes in-flight POSTs from postClient (shared dispatcher)
+            client.dispatcher().executorService().shutdownNow();
+            client.connectionPool().evictAll();
         }
     }
 }

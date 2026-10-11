@@ -1,5 +1,5 @@
 # MCP Attack Surface Detector (MCP-ASD)
-**Version: 1.0.2**
+**Version: 1.2.0**
 
 MCP-ASD is a Burp Suite extension (Montoya API) designed to identify, map, and test the attack surface of Model Context Protocol (MCP) servers. 
 
@@ -20,8 +20,9 @@ It provides a bridge between Burp's synchronous testing tools (Repeater, Intrude
 ## Installation
 
 ### Prerequisites
-- Java JDK 17+
-- Burp Suite Professional or Community (2023.12.1+)
+- Java JDK 21+ (to build)
+- Burp Suite Professional or Community (2025.6+)
+  - MCP server **detection** (passive and active checks) runs through Burp Scanner and requires **Burp Suite Professional**. Everything else works in Community.
 
 ### Building from Source
 _Note: There is a precompiled .jar at:_  
@@ -68,15 +69,15 @@ The resulting JAR will be located at `build/libs/mcp-asd.jar`.
 
 
 ### 2. Global Settings & Detection
-Click the **Settings** button in the top header to configure advanced options:
+Settings live in Burp's own settings window: **Settings → Extensions → MCP-ASD** (or search for "MCP"). Changes apply immediately.
 
 *   **Internal Traffic Visibility:**
-    *   **Proxy Handshake/Enumeration Traffic:** Route the extension's internal SSE/WebSocket traffic through Burp's local proxy listener (default: `127.0.0.1:8080`). This allows you to see the "invisible" handshake and enumeration requests in Burp's **Logger** and **Proxy History**.
+    *   **Proxy Handshake/Enumeration Traffic:** Route the extension's internal SSE/WebSocket traffic through Burp's local proxy listener (default: `127.0.0.1:8080`). This allows you to see the "invisible" handshake and enumeration requests in Burp's **Logger** and **Proxy History**. Proxied connections trust only Burp's CA certificate, and Burp applies its own upstream TLS settings. HTTP (POST only) connections and endpoint auto-detection always go through Burp's HTTP stack and appear in **Logger**.
+    *   **Ignore TLS certificate errors on direct connections:** Off by default. Only applies to SSE/WebSocket connections when proxying is turned off; enable it to connect directly to servers with self-signed or otherwise invalid certificates.
 
-*   **MCP Server Detection:**
-    *   **Passive Checks:** Monitors all passing traffic for MCP indicators (e.g., `MCP-Protocol-Version` header, JSON-RPC bodies, auth gateway redirects). Raises an **Informational Issue** in Burp if detected.
-    *   **Active Detection:** Automatically probes new domains for common MCP endpoints (`/mcp`, `/sse`, `/ws`, etc.) when they are first encountered. Detects endpoints behind auth gateways (302/303 redirects to OAuth, SAML, SSO, Zscaler, etc.).
-    *   **Limit to In-Scope:** Restricts active detection probes to domains that are in your Burp Target Scope (Recommended).
+*   **MCP Server Detection (Burp Suite Professional):**
+    *   **Passive Checks:** Burp's passive scanning checks traffic for MCP indicators (e.g., `MCP-Protocol-Version` header, JSON-RPC bodies, auth gateway redirects) and raises an **Informational Issue** if detected. Can be switched off in the settings.
+    *   **Active Detection:** Runs as part of Burp's active scans, once per host, probing common MCP endpoints (`/mcp`, `/sse`, `/ws`, etc.). Detects endpoints behind auth gateways (302/303 redirects to OAuth, SAML, SSO, Zscaler, etc.). Scope, scheduling and throttling follow your scan configuration.
 
 <img width="1108" height="803" alt="image" src="https://github.com/user-attachments/assets/f598284b-a0d2-426f-8f95-8cd7793ecaed" />  
 
@@ -94,6 +95,7 @@ The connection dialog includes a dedicated "Authentication" tab supporting three
 
 *   **HTTP Headers:** Add custom headers (e.g., `Authorization: Bearer <token>`, `X-API-Key: <key>`) to the transport connection.
 *   **mTLS (Mutual TLS):** Provide a PKCS#12 (`.p12`) client certificate and password. This allows the extension to handshake with servers requiring client-side certificates.
+    *   Burp presents client certificates itself for traffic it sends. For **HTTP (POST only)**, and for SSE/WebSocket while **Proxy Handshake/Enumeration Traffic** is on, configure the certificate in Burp under **Settings → Network → TLS → Client TLS certificates**. The certificate in the connection dialog is used for direct (non-proxied) SSE/WebSocket connections.
 *   **Initialization Parameters:** Inject custom JSON fields into the MCP `initialize` handshake.
     *   *Usage:* Paste a JSON object (e.g., `{"apiKey": "secret", "env": "prod"}`) into the text area.
     *   *Effect:* These fields are merged into the `params` object of the `initialize` JSON-RPC message sent immediately after connection.
@@ -147,7 +149,7 @@ MCP-ASD solves a fundamental impedance mismatch between Burp Suite and the Model
 To bridge this gap, MCP-ASD implements a novel **"Virtual Proxy" Architecture**:
 
 ### 1. Asynchronous Transport Layer
-Unlike standard Burp extensions that use `Burp.Http`, MCP-ASD utilizes a dedicated, robust HTTP client (`OkHttp`) to manage the persistent MCP connection.
+For the persistent SSE and WebSocket connections, MCP-ASD uses a dedicated HTTP client (`OkHttp`); request/response traffic (HTTP POST-only transport, endpoint auto-detection, scanner probes) uses Burp's HTTP API.
 *   **Justification:** Standard HTTP clients (including Burp's native API) block waiting for a response body to complete. For SSE (Server-Sent Events), the response body is an infinite stream that never completes. Attempting to read it with standard methods causes the thread to hang indefinitely.
 *   **Solution:** The extension maintains a dedicated background thread that reads the infinite stream event-by-event, decoupled from the Burp UI.
 
@@ -161,6 +163,8 @@ When you send a request from Burp Repeater or Intruder:
 6.  **Stitching:** When the matching JSON-RPC response arrives from the server, the extension "stitches" it into a standard HTTP 200 OK response and returns it to Burp.
 
 This allows you to fuzz MCP tools using Intruder's powerful payloads without breaking the persistent connection or needing to re-authenticate for every fuzzing attempt.
+
+**Bridge security:** Burp can't answer a request without sending it somewhere, so the bridge is a small listener on a random `127.0.0.1` port. It only accepts requests that come through the extension's `HttpHandler` from Burp's Repeater, Intruder, Scanner or other extensions: the handler adds a secret token (regenerated on every load), and the listener rejects requests without it or without `Host: mcp-asd.local`. Browser traffic through the Proxy is never bridged, so web pages can't reach the MCP session.
 
 ## Development Test Server
 A mock MCP server is included for testing the extension's features.

@@ -16,6 +16,10 @@ public class SessionStore {
         return pendingRequests.get(id);
     }
 
+    public void removeRequest(String id) {
+        pendingRequests.remove(id);
+    }
+
     public void completeRequest(String id, JSONObject response) {
         CompletableFuture<JSONObject> future = pendingRequests.remove(id);
         if (future != null) {

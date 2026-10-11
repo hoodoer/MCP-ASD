@@ -4,6 +4,7 @@ import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.core.ByteArray;
 import burp.api.montoya.http.HttpService;
 import burp.api.montoya.http.message.requests.HttpRequest;
+import burp.api.montoya.ui.editor.RawEditor;
 import com.mcp_asd.burp.McpProxy; 
 import com.mcp_asd.burp.GlobalSettings; 
 import org.json.JSONArray;
@@ -41,7 +42,7 @@ public class DashboardTab extends JComponent {
 
     private JLabel headerLabel;
     private JLabel statusLabel; // New status label
-    private JTextArea metadataInspector;
+    private RawEditor metadataInspector; // Burp's native (editable) editor for the JSON-RPC payload
     private JButton sendToRepeaterButton;
     private JButton sendToIntruderButton;
     private JButton serverInfoButton; // Promoted
@@ -53,6 +54,7 @@ public class DashboardTab extends JComponent {
     private JSONObject serverInfo; // Field for server info
 
     private final GlobalSettings settings; // Add field
+    private static final String PLACEHOLDER_TEXT = "Select an item on the left to generate a request...";
     private CancellationListener cancellationListener;
 
     public interface CancellationListener {
@@ -95,17 +97,9 @@ public class DashboardTab extends JComponent {
         
         JButton aboutButton = new JButton("About");
         aboutButton.addActionListener(e -> JOptionPane.showMessageDialog(this, 
-                "MCP Attack Surface Detector\n\nA Burp Suite extension for discovering and testing\nModel Context Protocol (MCP) servers.\n\nVersion: 1.0.2\nAuthor: Hoodoer\nEmail: hoodoer@bitwisemunitions.dev",
+                "MCP Attack Surface Detector\n\nA Burp Suite extension for discovering and testing\nModel Context Protocol (MCP) servers.\n\nVersion: 1.2.0\nAuthor: Hoodoer\nEmail: hoodoer@bitwisemunitions.dev",
                 "About MCP-ASD", 
                 JOptionPane.INFORMATION_MESSAGE));
-
-        JButton settingsButton = new JButton("Settings"); // New Button
-        settingsButton.addActionListener(e -> {
-            SwingUtilities.invokeLater(() -> {
-                SettingsDialog dialog = new SettingsDialog(SwingUtilities.getWindowAncestor(this), settings);
-                dialog.setVisible(true);
-            });
-        });
 
         serverInfoButton = new JButton("Server Info");
         serverInfoButton.setEnabled(false);
@@ -123,9 +117,7 @@ public class DashboardTab extends JComponent {
         JButton connectButton = new JButton("New Connection");
         connectButton.addActionListener(e -> {
             SwingUtilities.invokeLater(() -> {
-                Window parentWindow = SwingUtilities.getWindowAncestor(this);
-                Frame parentFrame = (parentWindow instanceof Frame) ? (Frame) parentWindow : null;
-                ConnectionDialog dialog = new ConnectionDialog(parentFrame, "", 8000, lastConfig);
+                ConnectionDialog dialog = new ConnectionDialog(api, api.userInterface().swingUtils().suiteFrame(), "", 8000, false, lastConfig);
                 dialog.setVisible(true);
                 if (dialog.isConfirmed()) {
                     clearData(); // Clear UI immediately
@@ -141,7 +133,6 @@ public class DashboardTab extends JComponent {
         headerButtons.add(connectButton);
         headerButtons.add(cancelButton); // Add Cancel button
         headerButtons.add(serverInfoButton);
-        headerButtons.add(settingsButton); // Add to panel
         headerButtons.add(aboutButton);
 
         topPanel.add(titlePanel, BorderLayout.WEST);
@@ -182,8 +173,9 @@ public class DashboardTab extends JComponent {
         JPanel rightPanel = new JPanel(new BorderLayout());
         rightPanel.setBorder(BorderFactory.createTitledBorder("Request Prototype / Details"));
         
-        metadataInspector = new JTextArea("Select an item on the left to generate a request...");
-        rightPanel.add(new JScrollPane(metadataInspector), BorderLayout.CENTER);
+        metadataInspector = api.userInterface().createRawEditor();
+        setInspectorText(PLACEHOLDER_TEXT);
+        rightPanel.add(metadataInspector.uiComponent(), BorderLayout.CENTER);
 
         sendToRepeaterButton = new JButton("Send to Repeater");
         sendToRepeaterButton.setEnabled(false);
@@ -223,11 +215,14 @@ public class DashboardTab extends JComponent {
         return list;
     }
 
+    private void setInspectorText(String text) {
+        metadataInspector.setContents(ByteArray.byteArray(text.getBytes(StandardCharsets.UTF_8)));
+    }
+
     private void updateDetails(AttackSurfaceNode node, String type) {
         if (node == null) return;
         String prototype = generatePrototypeRequest(node, type);
-        metadataInspector.setText(prototype);
-        metadataInspector.setCaretPosition(0);
+        setInspectorText(prototype);
         sendToRepeaterButton.setEnabled(true);
         sendToIntruderButton.setEnabled(true);
     }
@@ -257,7 +252,7 @@ public class DashboardTab extends JComponent {
             toolsModel.clear();
             resourcesModel.clear();
             promptsModel.clear();
-            metadataInspector.setText("Select an item on the left to generate a request...");
+            setInspectorText(PLACEHOLDER_TEXT);
             sendToRepeaterButton.setEnabled(false);
             sendToIntruderButton.setEnabled(false);
             if (serverInfoButton != null) serverInfoButton.setEnabled(false);
@@ -375,7 +370,7 @@ public class DashboardTab extends JComponent {
     }
 
     private void sendTo(boolean isIntruder) {
-        String requestBody = metadataInspector.getText();
+        String requestBody = new String(metadataInspector.getContents().getBytes(), StandardCharsets.UTF_8);
         if (requestBody == null || requestBody.isEmpty()) return;
 
         // Determine a name for the tab
@@ -402,7 +397,7 @@ public class DashboardTab extends JComponent {
         
         String rawRequestString = 
             "POST /invoke HTTP/1.1\r\n" +
-            "Host: mcp-asd.local\r\n" +
+            "Host: " + McpProxy.VIRTUAL_HOST + "\r\n" +
             "Content-Type: application/json\r\n" +
             "Content-Length: " + bodyBytes.length + "\r\n" +
             "\r\n" +
