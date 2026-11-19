@@ -47,7 +47,7 @@ public class McpSettingsPanel implements SettingsPanel {
 
         // Group 1: Internal Traffic Proxying
         JPanel proxyPanel = new JPanel(new GridBagLayout());
-        proxyPanel.setBorder(BorderFactory.createTitledBorder("Internal Traffic Visibility (SSE / WebSocket)"));
+        proxyPanel.setBorder(BorderFactory.createTitledBorder("Internal Traffic Visibility (SSE / WebSocket / Streamable HTTP)"));
         GridBagConstraints gbc = newConstraints();
 
         proxyTrafficCheckbox = new JCheckBox("Proxy Handshake/Enumeration Traffic");
@@ -55,9 +55,9 @@ public class McpSettingsPanel implements SettingsPanel {
 
         gbc.gridy++;
         gbc.insets = new Insets(0, 25, 5, 5);
-        proxyPanel.add(description("Route internal SSE/WebSocket traffic through Burp's Proxy listener so the handshake and "
-                + "enumeration requests appear in Logger and Proxy History. HTTP (POST only) and endpoint auto-detection "
-                + "always use Burp's HTTP stack and appear in Logger."), gbc);
+        proxyPanel.add(description("Route internal SSE/WebSocket/Streamable HTTP traffic through Burp's Proxy listener so the "
+                + "handshake and enumeration requests appear in Logger and Proxy History. HTTP (POST only) and endpoint "
+                + "auto-detection always use Burp's HTTP stack and appear in Logger."), gbc);
 
         gbc.gridy++;
         JPanel proxyConfig = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
