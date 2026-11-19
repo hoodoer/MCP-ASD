@@ -1,9 +1,12 @@
 # MCP Attack Surface Detector (MCP-ASD)
-**Version: 1.2.0**
+**Version: 1.3.0**
+
 
 MCP-ASD is a Burp Suite extension (Montoya API) designed to identify, map, and test the attack surface of Model Context Protocol (MCP) servers. 
 
-It provides a bridge between Burp's synchronous testing tools (Repeater, Intruder, Scanner) and the asynchronous, persistent nature of MCP connections (SSE & WebSockets). This allows security professionals to audit MCP Tools, Resources, and Prompts using standard web testing workflows.
+It provides a bridge between Burp's synchronous testing tools (Repeater, Intruder, Scanner) and the asynchronous, persistent nature of MCP connections (SSE, WebSockets, and Streamable HTTP). This allows security professionals to audit MCP Tools, Resources, and Prompts using standard web testing workflows.
+
+This tool can now be used with OWASP Vulnerable Web Application: [DV-MCP](https://vwad.owasp.org/app/damn-vulnerable-mcp-server-dvmcp/) for practice and training purposes.
 
 ## Features
 
@@ -26,7 +29,7 @@ It provides a bridge between Burp's synchronous testing tools (Repeater, Intrude
 
 ### Building from Source
 _Note: There is a precompiled .jar at:_  
-https://github.com/hoodoer/MCP-ASD/releases/tag/v1.0
+https://github.com/hoodoer/MCP-ASD/releases/tag/v1.2
 
 ```bash
 git clone https://github.com/your-repo/mcp-asd.git
@@ -167,7 +170,8 @@ This allows you to fuzz MCP tools using Intruder's powerful payloads without bre
 **Bridge security:** Burp can't answer a request without sending it somewhere, so the bridge is a small listener on a random `127.0.0.1` port. It only accepts requests that come through the extension's `HttpHandler` from Burp's Repeater, Intruder, Scanner or other extensions: the handler adds a secret token (regenerated on every load), and the listener rejects requests without it or without `Host: mcp-asd.local`. Browser traffic through the Proxy is never bridged, so web pages can't reach the MCP session.
 
 ## Development Test Server
-A mock MCP server is included for testing the extension's features.
+A mock MCP server is included for testing the extension's features. 
+
 
 ### Requirements
 ```bash

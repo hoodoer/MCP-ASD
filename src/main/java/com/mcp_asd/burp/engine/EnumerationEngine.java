@@ -31,7 +31,14 @@ public class EnumerationEngine implements TransportListener {
         return t;
     });
     
-    // Request IDs for tracking enumeration responses
+    // Advertised protocol versions per transport (most recent standard supporting it).
+    private static final String PROTOCOL_VERSION_STREAMABLE = "2026-07-28";
+    private static final String PROTOCOL_VERSION_LEGACY = "2024-11-05";
+    private String advertisedVersion; // what initialize advertised (per transport)
+    private String acceptedVersion;   // what the server accepted (null = none returned)
+
+    // Request IDs for tracking handshake + enumeration responses
+    private String discoverRequestId;
     private String initializeRequestId;
     private String toolsRequestId;
     private String resourcesRequestId;
@@ -123,6 +130,11 @@ public class EnumerationEngine implements TransportListener {
                 transport = new WebSocketTransport(api, settings);
             } else if ("HTTP (POST only)".equals(config.getTransport())) {
                 transport = new PostOnlyTransport(api, settings);
+            } else if ("Streamable HTTP".equals(config.getTransport())) {
+                StreamableHttpTransport sh = new StreamableHttpTransport(api, settings);
+                if (forceHttp1) sh.setForceHttp1(true);
+                sh.setAdvertisedVersion(advertisedVersionFor(config.getTransport()));
+                transport = sh;
             } else {
                 SseTransport sse = new SseTransport(api, settings);
                 if (forceHttp1) sse.setForceHttp1(true);
@@ -174,13 +186,36 @@ public class EnumerationEngine implements TransportListener {
     public void onOpen() {
         api.logging().logToOutput("Transport connected.");
         if (dashboardTab != null) dashboardTab.setStatus("🔵 Handshaking...", java.awt.Color.BLUE.darker());
-        
-        // Trigger initial discovery
+
+        String transportName = currentConfig != null ? currentConfig.getTransport() : "";
+        advertisedVersion = advertisedVersionFor(transportName);
+
+        if ("Streamable HTTP".equals(transportName)) {
+            // Discover-first probe (spec 2026-07-28: servers MUST implement
+            // server/discover). The transport supplies the modern headers and
+            // _meta from its 2026 pre-handshake seed; a legacy server answers a
+            // non-modern error and the engine falls back to initialize.
+            discoverRequestId = java.util.UUID.randomUUID().toString();
+            JSONObject discoverRequest = new JSONObject();
+            discoverRequest.put("jsonrpc", "2.0");
+            discoverRequest.put("method", "server/discover");
+            discoverRequest.put("params", new JSONObject());
+            discoverRequest.put("id", discoverRequestId);
+
+            api.logging().logToOutput("Sending server/discover probe (protocolVersion " + advertisedVersion + ")");
+            sendRequest(discoverRequest.toString());
+        } else {
+            sendInitialize();
+        }
+    }
+
+    /** Build and send the classic initialize handshake request. */
+    private void sendInitialize() {
         JSONObject initParams = new JSONObject();
-        initParams.put("protocolVersion", "2024-11-05");
+        initParams.put("protocolVersion", advertisedVersion);
         initParams.put("capabilities", new JSONObject());
-        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "1.2.0"));
-        
+        initParams.put("clientInfo", new JSONObject().put("name", "MCP-ASD").put("version", "1.3.0"));
+
         if (currentConfig != null && currentConfig.getInitializationOptions() != null && !currentConfig.getInitializationOptions().trim().isEmpty()) {
             try {
                 JSONObject userParams = new JSONObject(currentConfig.getInitializationOptions());
@@ -191,16 +226,245 @@ public class EnumerationEngine implements TransportListener {
                 api.logging().logToError("Invalid JSON in Initialization Options: " + e.getMessage());
             }
         }
-        
+
         initializeRequestId = java.util.UUID.randomUUID().toString();
-        
+
         JSONObject initRequest = new JSONObject();
         initRequest.put("jsonrpc", "2.0");
         initRequest.put("method", "initialize");
         initRequest.put("params", initParams);
         initRequest.put("id", initializeRequestId);
 
+        api.logging().logToOutput("Sending initialize (advertised protocolVersion " + advertisedVersion + ")");
         sendRequest(initRequest.toString());
+    }
+
+    /** Most recent MCP standard that supports the given transport (per-transport version table). */
+    private String advertisedVersionFor(String transportName) {
+        return "Streamable HTTP".equals(transportName) ? PROTOCOL_VERSION_STREAMABLE : PROTOCOL_VERSION_LEGACY;
+    }
+
+    /** True when a JSON-RPC error code is in the MCP spec-reserved modern range (-32020..-32099). */
+    private static boolean isModernErrorCode(int code) {
+        return code >= -32099 && code <= -32020;
+    }
+
+    /**
+     * Reads a supported-versions list from a server/discover result
+     * ({@code result.supportedVersions}) or a JSON-RPC error
+     * ({@code error.data.supported}, {@code error.data} as a bare array, or
+     * {@code error.supported}). Returns null when no recognizable list is present.
+     */
+    private static JSONArray readVersionList(JSONObject payload) {
+        try {
+            if (payload == null) return null;
+            if (payload.has("supportedVersions") && payload.get("supportedVersions") instanceof JSONArray arr) return arr;
+            if (payload.has("supported") && payload.get("supported") instanceof JSONArray arr) return arr;
+            if (payload.has("data")) {
+                Object data = payload.get("data");
+                if (data instanceof JSONArray arr) return arr;
+                if (data instanceof JSONObject dataObj
+                        && dataObj.has("supported") && dataObj.get("supported") instanceof JSONArray arr) {
+                    return arr;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * Splits a version list into [newest modern revision (≥ 2026-07-28),
+     * newest legacy revision] — either element may be null (issue 0005 ladder).
+     */
+    private static String[] splitModernLegacy(JSONArray versions) {
+        String modern = null;
+        String legacy = null;
+        if (versions != null) {
+            for (int i = 0; i < versions.length(); i++) {
+                String v = versions.optString(i, null);
+                if (v == null) continue;
+                v = v.trim();
+                if (v.isEmpty()) continue;
+                if (v.compareTo("2026-07-28") >= 0) {
+                    if (modern == null || v.compareTo(modern) > 0) modern = v;
+                } else if (legacy == null || v.compareTo(legacy) > 0) {
+                    legacy = v;
+                }
+            }
+        }
+        return new String[]{modern, legacy};
+    }
+
+    /**
+     * If a modern error carries no version list but names a modern version in
+     * its data (e.g. HeaderMismatch), return it; otherwise null.
+     */
+    private static String namedModernVersion(JSONObject error) {
+        try {
+            if (error != null && error.has("data")) {
+                Object data = error.get("data");
+                String candidate = null;
+                if (data instanceof String s) {
+                    candidate = s.trim();
+                } else if (data instanceof JSONObject dataObj) {
+                    for (String key : new String[]{"protocolVersion", "expected", "version"}) {
+                        if (dataObj.has(key) && dataObj.get(key) instanceof String s) {
+                            candidate = s.trim();
+                            break;
+                        }
+                    }
+                }
+                if (candidate != null && candidate.matches("\\d{4}-\\d{2}-\\d{2}") && candidate.compareTo("2026-07-28") >= 0) {
+                    return candidate;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** Reseed the advertised version on the engine and (Streamable HTTP) transport before a probe. */
+    private void reseedAdvertised(String version) {
+        advertisedVersion = version;
+        if (transport instanceof StreamableHttpTransport sh) {
+            sh.setAdvertisedVersion(version);
+        }
+    }
+
+    /**
+     * Downgrade ladder for the server/discover probe response:
+     * decides modern vs. legacy era and the version to run at, then proceeds —
+     * modern: adopt the version, push it to the transport, and enumerate (no
+     * initialize, no notifications/initialized); legacy: reseed the transport
+     * to the newest listed legacy revision (or the legacy seed) and run the
+     * classic initialize handshake.
+     */
+    private void handleDiscoverResponse(JSONObject json) {
+        JSONObject error = json.has("error") && json.get("error") instanceof JSONObject e ? e : null;
+        JSONObject result = json.has("result") && json.get("result") instanceof JSONObject r ? r : null;
+
+        JSONArray versions = null;
+        boolean recognizedModern = false;
+        if (result != null) {
+            // A server that answers server/discover implements the modern method.
+            recognizedModern = true;
+            versions = readVersionList(result);
+        } else if (error != null) {
+            recognizedModern = isModernErrorCode(error.optInt("code", 0));
+            versions = readVersionList(error);
+        }
+
+        String[] split = splitModernLegacy(versions);
+        String modern = split[0];
+        String legacy = split[1];
+
+        if (modern != null) {
+            if (result != null) {
+                api.logging().logToOutput("Modern MCP server: server/discover confirmed a modern server (supportedVersions: "
+                        + versions + "); adopting " + modern);
+            } else {
+                api.logging().logToOutput("Modern MCP server rejected the probe (error: " + error + "); adopting " + modern);
+            }
+            acceptedVersion = modern;
+            advertisedVersion = modern;
+            if (transport != null) transport.setProtocolVersion(modern);
+            logAcceptedVersion("modern server, no handshake");
+            if (dashboardTab != null) dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
+            showDiscoverServerInfo(result, modern);
+            if (latch != null) latch.countDown();
+            beginEnumeration(false);
+            return;
+        }
+
+        if (recognizedModern && legacy != null) {
+            api.logging().logToOutput("Modern MCP server lists only legacy revisions"
+                    + (error != null ? " (error: " + error + ")" : "")
+                    + "; downgrading to " + legacy + " and re-handshaking");
+            reseedAdvertised(legacy);
+            sendInitialize();
+            return;
+        }
+
+        if (recognizedModern) {
+            // Modern signal without a usable version list (e.g. -32020 HeaderMismatch):
+            // the server rejected the request shape, not the version — stay modern,
+            // at the version the error names (if any) or the advertised one.
+            String named = error != null ? namedModernVersion(error) : null;
+            String target = named != null ? named
+                    : (advertisedVersion != null && advertisedVersion.compareTo("2026-07-28") >= 0
+                            ? advertisedVersion : PROTOCOL_VERSION_STREAMABLE);
+            api.logging().logToOutput("Modern MCP server (no supported list in response"
+                    + (error != null ? "; error: " + error : "") + "); continuing at " + target);
+            acceptedVersion = target;
+            advertisedVersion = target;
+            if (transport != null) transport.setProtocolVersion(target);
+            logAcceptedVersion("modern server, no handshake");
+            if (dashboardTab != null) dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
+            if (latch != null) latch.countDown();
+            beginEnumeration(false);
+            return;
+        }
+
+        // Legacy server (404/-32601, empty or non-modern body, unrecognized error):
+        // fall back to the classic initialize handshake at the legacy seed.
+        api.logging().logToOutput("Falling back to legacy initialize (probe "
+                + (error != null ? "answered " + error : "got no recognizable modern response")
+                + "; advertising " + PROTOCOL_VERSION_LEGACY + ")");
+        reseedAdvertised(PROTOCOL_VERSION_LEGACY);
+        sendInitialize();
+    }
+
+    /** Populate the dashboard Server Info from a server/discover result (serverInfo lives in result._meta). */
+    private void showDiscoverServerInfo(JSONObject result, String version) {
+        if (dashboardTab == null || result == null) return;
+        JSONObject info = new JSONObject();
+        info.put("protocolVersion", version);
+        if (result.has("capabilities") && result.get("capabilities") instanceof JSONObject) {
+            info.put("capabilities", result.get("capabilities"));
+        }
+        if (result.has("instructions") && result.get("instructions") instanceof String) {
+            info.put("instructions", result.get("instructions"));
+        }
+        JSONObject meta = result.optJSONObject("_meta");
+        if (meta != null && meta.has("io.modelcontextprotocol/serverInfo")) {
+            info.put("serverInfo", meta.get("io.modelcontextprotocol/serverInfo"));
+        }
+        SwingUtilities.invokeLater(() -> dashboardTab.updateServerInfo(info));
+    }
+
+    /** Log the accepted protocol version and flag a downgrade vs what was advertised. */
+    private void logAcceptedVersion(String context) {
+        if (acceptedVersion == null) {
+            api.logging().logToOutput("Protocol version: server returned none (legacy-era behavior); " + context + ".");
+        } else if (acceptedVersion.equals(advertisedVersion)) {
+            api.logging().logToOutput("Protocol version: " + acceptedVersion + " (as advertised); " + context + ".");
+        } else {
+            api.logging().logToOutput("Protocol version downgraded: advertised " + advertisedVersion
+                    + ", server accepted " + acceptedVersion + "; " + context + ".");
+        }
+    }
+
+    /**
+     * Start enumeration. notifications/initialized goes out only after a legacy
+     * handshake — the 2026 revision defines no client→server notifications over
+     * Streamable HTTP.
+     */
+    private void beginEnumeration(boolean legacyHandshake) {
+        if (legacyHandshake) {
+            // Send 'notifications/initialized' notification (No ID)
+            JSONObject initializedNotify = new JSONObject();
+            initializedNotify.put("jsonrpc", "2.0");
+            initializedNotify.put("method", "notifications/initialized");
+            sendRequest(initializedNotify.toString());
+        }
+
+        // NOW trigger enumeration
+        toolsRequestId = java.util.UUID.randomUUID().toString();
+        resourcesRequestId = java.util.UUID.randomUUID().toString();
+        promptsRequestId = java.util.UUID.randomUUID().toString();
+
+        sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":\"" + toolsRequestId + "\"}");
+        sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"resources/list\",\"id\":\"" + resourcesRequestId + "\"}");
+        sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"prompts/list\",\"id\":\"" + promptsRequestId + "\"}");
     }
 
     @Override
@@ -237,44 +501,87 @@ public class EnumerationEngine implements TransportListener {
                 String id = json.getString("id");
                 final JSONObject finalJson = json; // Create final reference for lambdas
                 
-                // Handshake Response
-                if (id.equals(initializeRequestId)) {
-                     if (json.has("error")) {
-                         api.logging().logToError("Initialization Failed: " + json.getJSONObject("error").toString());
-                         if (dashboardTab != null) dashboardTab.setStatus("🔴 Init Failed", java.awt.Color.RED);
-                         connectionFailed = true;
-                         if (latch != null) latch.countDown();
-                         return;
-                     }
-                     
-                     api.logging().logToOutput("Handshake successful. Sending 'notifications/initialized' and starting enumeration.");
-                     if (dashboardTab != null) {
-                         dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
-                         if (json.has("result")) {
-                             dashboardTab.updateServerInfo(finalJson.getJSONObject("result"));
-                         }
-                     }
-                     
-                     // Signal success to the attemptConnection waiter
-                     if (latch != null) latch.countDown();
+                  // Discover probe response (Streamable HTTP, modern-era probe)
+                  if (id.equals(discoverRequestId)) {
+                      handleDiscoverResponse(finalJson);
+                      return;
+                  }
 
-                     // Send 'notifications/initialized' notification (No ID)
-                     JSONObject initializedNotify = new JSONObject();
-                     initializedNotify.put("jsonrpc", "2.0");
-                     initializedNotify.put("method", "notifications/initialized");
-                     sendRequest(initializedNotify.toString());
+                  // Handshake Response
+                  if (id.equals(initializeRequestId)) {
+                       if (json.has("error")) {
+                           JSONObject error = json.getJSONObject("error");
+                           // Downgrade ladder (issue 0005): an initialize error is processed the
+                           // same way as a discover response — modern signal → modern regime at
+                           // the newest listed modern version; a legacy-only list → re-handshake
+                           // at the newest listed revision.
+                           String[] split = splitModernLegacy(readVersionList(error));
+                           if (split[0] != null) {
+                               api.logging().logToOutput("Modern MCP server rejected initialize (error: " + error.toString()
+                                       + "); adopting " + split[0] + " with per-request version declaration.");
+                               acceptedVersion = split[0];
+                               advertisedVersion = split[0];
+                               if (transport != null) transport.setProtocolVersion(split[0]);
+                               logAcceptedVersion("modern server, no handshake");
+                               if (dashboardTab != null) dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
+                               if (latch != null) latch.countDown();
+                               beginEnumeration(false);
+                               return;
+                           }
+                           if (isModernErrorCode(error.optInt("code", 0))) {
+                               String named = namedModernVersion(error);
+                               String target = named != null ? named
+                                       : (advertisedVersion != null && advertisedVersion.compareTo("2026-07-28") >= 0
+                                               ? advertisedVersion : PROTOCOL_VERSION_STREAMABLE);
+                               api.logging().logToOutput("Modern MCP server rejected initialize (error: " + error.toString()
+                                       + "); continuing at " + target + " with per-request version declaration.");
+                               acceptedVersion = target;
+                               advertisedVersion = target;
+                               if (transport != null) transport.setProtocolVersion(target);
+                               logAcceptedVersion("modern server, no handshake");
+                               if (dashboardTab != null) dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
+                               if (latch != null) latch.countDown();
+                               beginEnumeration(false);
+                               return;
+                           }
+                           if (split[1] != null) {
+                               api.logging().logToOutput("Server rejected initialize and named legacy revisions (error: " + error.toString()
+                                       + "); re-handshaking at " + split[1]);
+                               reseedAdvertised(split[1]);
+                               sendInitialize();
+                               return;
+                           }
+                           api.logging().logToError("Initialization Failed: " + error.toString());
+                           if (dashboardTab != null) dashboardTab.setStatus("🔴 Init Failed", java.awt.Color.RED);
+                           connectionFailed = true;
+                           if (latch != null) latch.countDown();
+                           return;
+                       }
 
-                     // NOW trigger enumeration
-                     toolsRequestId = java.util.UUID.randomUUID().toString();
-                     resourcesRequestId = java.util.UUID.randomUUID().toString();
-                     promptsRequestId = java.util.UUID.randomUUID().toString();
+                      // Legacy path: the server answered initialize — every protocol version it
+                      // returns is accepted (absent = null/legacy) and pushed to the transport.
+                      acceptedVersion = null;
+                      if (json.has("result") && json.get("result") instanceof JSONObject result
+                              && result.has("protocolVersion")) {
+                          acceptedVersion = result.getString("protocolVersion");
+                      }
+                      if (transport != null) transport.setProtocolVersion(acceptedVersion);
+                      logAcceptedVersion("handshake successful");
 
-                     sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":\"" + toolsRequestId + "\"}");
-                     sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"resources/list\",\"id\":\"" + resourcesRequestId + "\"}");
-                     sendRequest("{\"jsonrpc\":\"2.0\",\"method\":\"prompts/list\",\"id\":\"" + promptsRequestId + "\"}");
-                     
-                     return;
-                }
+                      api.logging().logToOutput("Handshake successful. Sending 'notifications/initialized' and starting enumeration.");
+                      if (dashboardTab != null) {
+                          dashboardTab.setStatus("🔵 Enumerating...", java.awt.Color.BLUE.darker());
+                          if (json.has("result")) {
+                              dashboardTab.updateServerInfo(finalJson.getJSONObject("result"));
+                          }
+                      }
+
+                       // Signal success to the attemptConnection waiter
+                       if (latch != null) latch.countDown();
+
+                       beginEnumeration(true);
+                       return;
+                 }
 
                 if (id.equals(toolsRequestId)) {
                     toolsDone = true;

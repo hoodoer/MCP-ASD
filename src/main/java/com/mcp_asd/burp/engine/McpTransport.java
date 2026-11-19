@@ -6,4 +6,5 @@ public interface McpTransport {
     void connect(ConnectionConfiguration config, TransportListener listener);
     void send(String message);
     void close();
+    default void setProtocolVersion(String version) {}
 }
